@@ -1,0 +1,24 @@
+# Workshop conda environment. A trimmed, pinned subset of the production
+# core_env.yaml -- only what the segmentation demo needs. Pinning (==) is the
+# Workshop 5 reproducibility lesson: the same spec rebuilds the same env.
+#
+#   conda env create -f environment.yml
+#   conda activate workshop-hpc
+name: workshop-hpc
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - torch==2.8.*
+      - torchvision==0.23.*
+      - numpy==2.2.*
+      - pillow==11.3.*
+      - scikit-image==0.25.*
+      - scikit-learn==1.7.*
+      - pandas==2.3.*
+      - matplotlib==3.10.*
+      - tqdm==4.67.*

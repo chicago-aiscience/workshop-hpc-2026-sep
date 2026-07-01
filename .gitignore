@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.ipynb_checkpoints/
+
+# Conda / venv
+.conda/
+.venv/
+venv/
+
+# SLURM job output
+slurm-*.out
+*.out
+*.err
+
+# Data / model artifacts (kept outside the repo via config/paths.sh, but
+# ignore anything that ends up here by accident)
+data/
+runs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# OS / editor cruft
+.DS_Store
+.vscode/
+.idea/
+*.swp
