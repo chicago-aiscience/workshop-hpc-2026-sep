@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=seg-finetune
-#SBATCH --partition=general          # <-- set to your GPU partition; check `sinfo`
-#SBATCH --gres=gpu:1
+#SBATCH --account=pi-dfreedman          #change to an allowed account on the cluster
+#SBATCH --partition=schmidt-gpu         # GPU partition for Schmidt fellows
+#SBATCH --qos=schmidt
+#SBATCH --gres=gpu:1                    # request 1 GPU (adjust as needed)
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=02:00:00
@@ -11,6 +15,9 @@
 
 set -euo pipefail
 source config/paths.sh
+
+# Load required modules
+module load python/anaconda-2025.12
 
 # PyTorch from the conda env bundles its own CUDA runtime, so a system CUDA
 # module is usually NOT needed (only the node's NVIDIA driver). Load one if your
