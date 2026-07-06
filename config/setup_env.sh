@@ -9,16 +9,33 @@
 #   ./setup_env.sh            # build if missing, else skip
 #   ./setup_env.sh --force    # remove and rebuild from scratch
 #
-# Locations default to per-user scratch; override by exporting before running:
-#   ENV_PREFIX=/some/path ./setup_env.sh
+# You choose where the env and its package cache live -- there are NO built-in
+# location defaults. Set SCRATCH_BASE (env + cache derived from it) OR set
+# ENV_PREFIX and CONDA_PKGS_DIRS explicitly, e.g.:
+#   SCRATCH_BASE=/net/scratch2/$USER ./setup_env.sh
+#   ENV_PREFIX=/net/projects2/.../env CONDA_PKGS_DIRS=/net/scratch2/$USER/pkgs ./setup_env.sh
 set -euo pipefail
 
-# --- config (per-user scratch by default) ---
-SCRATCH_BASE="${SCRATCH_BASE:-/net/scratch2/$USER}"
-ENV_PREFIX="${ENV_PREFIX:-$SCRATCH_BASE/workshop-hpc-env}"
-PKGS_DIR="${CONDA_PKGS_DIRS:-$SCRATCH_BASE/conda-pkgs}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/environment.yml}"
+# --- locate the project (environment.yml sits in the project root, one dir up) ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # <project>/config
+REPO_DIR="$(dirname "$SCRIPT_DIR")"                          # <project> root
+ENV_FILE="${ENV_FILE:-$REPO_DIR/environment.yml}"
+
+# --- where to put things (NO defaults: you must choose) ---
+# Either set SCRATCH_BASE and both are derived from it, or set ENV_PREFIX and
+# CONDA_PKGS_DIRS explicitly. Nothing has a built-in location, so the script
+# never silently writes to a cluster path you didn't pick.
+SCRATCH_BASE="${SCRATCH_BASE:-}"
+ENV_PREFIX="${ENV_PREFIX:-${SCRATCH_BASE:+$SCRATCH_BASE/workshop-hpc-env}}"
+PKGS_DIR="${CONDA_PKGS_DIRS:-${SCRATCH_BASE:+$SCRATCH_BASE/conda-pkgs}}"
+if [ -z "$ENV_PREFIX" ] || [ -z "$PKGS_DIR" ]; then
+    cat >&2 <<EOF
+ERROR: no location chosen -- tell the script where to build the env.
+  Option A (one base):   SCRATCH_BASE=/net/scratch2/$USER ./setup_env.sh
+  Option B (explicit):   ENV_PREFIX=/path/env CONDA_PKGS_DIRS=/path/cache ./setup_env.sh
+EOF
+    exit 1
+fi
 
 FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
