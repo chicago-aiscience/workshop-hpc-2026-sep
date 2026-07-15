@@ -5,10 +5,10 @@ Use the fine-tune job (`02_finetune.sbatch`) as the running example.
 ## Submit and watch the queue
 
 ```bash
-sbatch slurm/02_finetune.sbatch       # prints: Submitted batch job 12345
+sbatch slurm/02_finetune.sbatch       # prints: Submitted batch job <JOBID>
 squeue --me                           # your jobs, incl. the ST (state) column
-squeue -j 12345 --long                # one job, detailed
-scontrol show job 12345               # full record: node, resources, reason
+squeue -j <JOBID> --long                # one job, detailed
+scontrol show job <JOBID>               # full record: node, resources, reason
 ```
 
 ## Job state codes
@@ -28,19 +28,16 @@ The `ST` column in `squeue` gives the state of your job. The codes you'll see mo
 
 ## Watch resources live (GPU usage)
 
-Find the node your job landed on (`squeue --me` → NODELIST), then SSH to it and
-watch the GPU:
+Watch the GPU usage by attaching a shell to a running job:
 
 ```bash
-squeue --me -o "%N"                   # e.g. gpu-a001
-ssh gpu-a001
-nvidia-smi -l 1                       # refresh every 1s: util %, memory, the python PID
+srun --jobid=<JOBID> --overlap --pty nvidia-smi
 ```
 
 Cluster-wide view of what's free:
 
 ```bash
-sinfo -p general                      # partition state / idle nodes
+sinfo -p schmidt-gpu                  # partition state / idle nodes for schmidt partition
 sinfo -N -o "%N %G %C %m"             # per-node: gres(GPU), CPUs, memory
 ```
 
@@ -49,8 +46,8 @@ sinfo -N -o "%N %G %C %m"             # per-node: gres(GPU), CPUs, memory
 The job splits output by stream (see the `#SBATCH --output/--error` lines):
 
 ```bash
-tail -f logs/finetune_12345.out       # stdout: loss curve, progress
-tail -f logs/finetune_12345.err       # stderr: tracebacks, CUDA OOM, warnings
+tail -f logs/finetune_<JOBID>.out       # stdout: loss curve, progress
+tail -f logs/finetune_<JOBID>.err       # stderr: tracebacks, CUDA OOM, warnings
 ```
 
 Debugging rule of thumb: **`.out` tells you how far it got, `.err` tells you why
@@ -59,7 +56,7 @@ it stopped.** A CUDA out-of-memory error here → lower `--batch-size`.
 ## Metrics after the job finishes
 
 ```bash
-sacct -j 12345 --format=JobID,State,Elapsed,MaxRSS,ReqMem,AllocTRES%40
+sacct -j <JOBID> --format=JobID,State,Elapsed,MaxRSS,ReqMem,AllocTRES%40
 ```
 
 `MaxRSS` (peak memory) and `Elapsed` tell you whether your `--mem`/`--time`
@@ -74,7 +71,7 @@ A pending job isn't broken — SLURM just hasn't scheduled it yet. The
 
 ```bash
 squeue --me -o "%.10i %.8T %.40R"     # jobid, state, and the reason
-scontrol show job 12345 | grep -i reason
+scontrol show job <JOBID> | grep -i reason
 ```
 
 [Reasons list](https://slurm.schedmd.com/squeue.html#SECTION_JOB-REASON-CODES)
@@ -84,25 +81,20 @@ scontrol show job 12345 | grep -i reason
 For a job that ran (or failed), the exit code tells you *how* it ended:
 
 ```bash
-sacct -j 12345 --format=JobID,State,ExitCode,DerivedExitCode,Elapsed
-scontrol show job 12345 | grep -i exit    # only for ~5 min after it ends
+sacct -j <JOBID> --format=JobID,State,ExitCode,DerivedExitCode,Elapsed
+scontrol show job <JOBID> | grep -i exit    # only for ~5 min after it ends
 ```
 
 ## Cancel
 
 ```bash
-scancel 12345                         # one job
+scancel <JOBID>                       # one job
 scancel --me                          # all of yours
 ```
 
 ## Recovering from interruption / preemption
 
-The DSI cluster can **preempt** your job (see
-<https://cluster-policy.ds.uchicago.edu/using-the-cluster/batch-jobs/>). Our
-training script checkpoints on a regular interval, at each epoch boundary, and
-on the preemption warning, then hands the checkpoint back with `--resume-from`
-on restart — so a requeued job continues instead of restarting. See
-`03_checkpoint.sbatch`.
+The DSI cluster can **preempt** your job (see <https://cluster-policy.ds.uchicago.edu/using-the-cluster/batch-jobs/>). Our training script checkpoints on a regular interval, at each epoch boundary, and on the preemption warning, then hands the checkpoint back with `--resume-from` on restart — so a requeued job continues instead of restarting. See `03_checkpoint.sbatch`.
 
 ### Test it yourself — send the warning signal
 
@@ -112,7 +104,7 @@ work. The `#SBATCH --signal=B:USR2@120` line only delivers `SIGUSR2` automatical
 with `scancel`:
 
 ```bash
-scancel --signal=USR2 --batch 12345   # short form: scancel -s USR2 -b 12345
+scancel --signal=USR2 --batch <JOBID>   # short form: scancel -s USR2 -b <JOBID>
 ```
 
 > 🧰 - The `--batch` (`-b`) flag is essential. Without it, `scancel --signal` targets
@@ -124,36 +116,30 @@ Full loop — the wrapper requeues itself, so resume is automatic (same job id):
 
 ```bash
 # 1. Submit and note the job id
-sbatch slurm/03_checkpoint.sbatch          # -> Submitted batch job 12345
+sbatch slurm/03_checkpoint.sbatch          # -> Submitted batch job <JOBID>
 
 # 2. Wait until it is RUNNING and a few steps in (so there is progress to save)
 squeue --me
-tail -f logs/ckpt_12345.out
+tail -f logs/ckpt_<JOBID>.out
 
 # 3. Send the preemption warning yourself
-scancel --signal=USR2 --batch 12345
+scancel --signal=USR2 --batch <JOBID>
 
-# 4. In logs/ckpt_12345.out you should see, in order:
+# 4. In logs/ckpt_<JOBID>.out you should see, in order:
 #      USR2 received: signalling Python to checkpoint...
 #      [seg] signal 12 received; checkpointing at next step boundary...
 #      [seg] checkpoint saved on preemption warning; exiting for requeue.
-#      Requeuing job 12345 via scontrol requeue.
+#      Requeuing job <JOBID> via scontrol requeue.
 
 # 5. Watch it come back on its own: squeue shows the SAME job id go PD -> R again,
 #    and the new run appends "Resuming from .../seg_finetune_last.pt" to the log.
 squeue --me
-sacct -j 12345 --format=JobID,State,ExitCode,Restart%7   # Restart increments to 1
+sacct -j <JOBID> --format=JobID,State,ExitCode,Restart%7   # Restart increments to 1
 ls -l "$WORK_DIR/runs/seg/seg_finetune_last.pt"
 ```
 
 Notes:
-- `SIGUSR2` is **signal 12** on Linux (what you'll see logged). The job must be `R`
-  (running), not `PD`, when you signal it. We use USR2 (not USR1) because some
-  frameworks (PyTorch Lightning, submitit) already claim USR1 for their own requeue.
-- **The requeue uses `scontrol requeue`, which works on any cluster** (given
-  `#SBATCH --requeue` and that you own the job) — no special exit-code policy needed.
-  If requeue is disabled on your cluster, you can still resume manually: `scancel
-  12345`, then `sbatch slurm/03_checkpoint.sbatch` (the wrapper reads the checkpoint
-  off disk).
-- To signal the process directly instead: `squeue --me -o "%N"` → `ssh <node>` →
-  `kill -USR2 <python_pid>`. `scancel -b` is cleaner and needs no node access.
+- `SIGUSR2` is **signal 12** on Linux (what you'll see logged). The job must be `R` (running), not `PD`, when you signal it. We use USR2 (not USR1) because some frameworks (PyTorch Lightning, submitit) already claim USR1 for their own requeue.
+- **The requeue uses `scontrol requeue`, which works on any cluster** (given `#SBATCH --requeue` and that you own the job) — no special exit-code policy needed. If requeue is disabled on your cluster, you can still resume manually: `scancel
+  <JOBID>`, then `sbatch slurm/03_checkpoint.sbatch` (the wrapper reads the checkpoint off disk).
+- To signal the process directly instead: `squeue --me -o "%N"` → `ssh <node>` → `kill -USR2 <python_pid>`. `scancel -b` is cleaner and needs no node access.
