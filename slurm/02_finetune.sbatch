@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=seg-finetune
-#SBATCH --account=pi-dfreedman          #change to an allowed account on the cluster
+#SBATCH --account=pi-dfreedman          # change to an allowed account on the cluster
 #SBATCH --partition=schmidt-gpu         # GPU partition for Schmidt fellows
 #SBATCH --qos=schmidt
 #SBATCH --gres=gpu:1                    # request 1 GPU (adjust as needed)
@@ -31,10 +31,11 @@ python src/build_manifest.py --input-dir "$INPUT_DIR" \
     --mode train --limit 1000 \
     --out "$WORK_DIR/data/manifest_train.csv"
 
-# 2. Fine-tune. --resume makes this restartable after preemption (Workshop 2/5).
+# 2. Fine-tune (a plain fresh run). Preemption-resilient checkpoint/resume is
+#    demonstrated separately in slurm/03_checkpoint.sbatch.
 python src/seg_finetune.py \
     --manifest "$WORK_DIR/data/manifest_train.csv" \
     --out "$WORK_DIR/runs/seg" \
-    --epochs 10 --batch-size 4 --resume
+    --epochs 10 --batch-size 4
 
 echo "finetune complete on $(hostname) job $SLURM_JOB_ID"

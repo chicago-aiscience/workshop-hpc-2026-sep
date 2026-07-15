@@ -17,6 +17,9 @@ where it left off (Workshop 2 + 5).
 import argparse
 import csv
 import datetime
+import os
+import signal
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +34,49 @@ from torchvision.transforms.functional import to_tensor, resize, normalize
 # input must be normalized with these for the pretrained weights to behave.
 IMAGENET_MEAN: list[float] = [0.485, 0.456, 0.406]
 IMAGENET_STD: list[float] = [0.229, 0.224, 0.225]
+
+# Steps between regular ("interval") checkpoints. Override per run with
+# --checkpoint-interval; set to 0 to disable interval saves (epoch-boundary and
+# preemption-signal saves still happen).
+CHECKPOINT_INTERVAL: int = 50
+
+# Set by the SIGUSR2 handler when SLURM warns of imminent preemption / time-out.
+# The training loop watches this flag and checkpoints at the next safe point.
+# (We use SIGUSR2 rather than SIGUSR1 because SIGUSR1 is already claimed by some
+# frameworks -- e.g. PyTorch Lightning, submitit -- for their own auto-requeue.)
+should_checkpoint: bool = False
+
+
+def handle_preempt(signum, frame) -> None:
+    """Signal handler for the preemption warning (SIGUSR2).
+
+    Kept deliberately minimal: it only flips a flag. Actually saving here would
+    be unsafe -- a signal can interrupt at any instruction, and torch.save / the
+    CUDA allocator are not async-signal-safe. The training loop does the save at
+    the next step boundary, where model/optimizer state is consistent.
+    """
+    global should_checkpoint
+    print(f"[seg] signal {signum} received; checkpointing at next step boundary...", flush=True)
+    should_checkpoint = True
+
+
+def atomic_torch_save(state: dict, path: Path) -> None:
+    """Write a checkpoint atomically so a mid-write kill never corrupts it.
+
+    Saves to a sibling `.tmp` file first, then `os.replace()`s it into place.
+    `os.replace` is atomic on the same filesystem, so `path` is always either the
+    complete old checkpoint or the complete new one -- never a truncated file if
+    SLURM's grace window expires (SIGKILL) during the write.
+
+    Args:
+        state: The checkpoint dict to serialize.
+        path: Destination `.pt` path (its parent is created if needed).
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    torch.save(state, tmp)
+    os.replace(tmp, path)
 
 
 class OrganoidSeg(Dataset):
@@ -83,7 +129,7 @@ def parse_commandline_args() -> argparse.Namespace:
 
     Returns:
         The parsed arguments: `manifest`, `out`, `epochs`, `batch_size`, `lr`,
-        and the `resume` flag.
+        `ckpt_dir`, `resume_from`, and `checkpoint_interval`.
     """
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", required=True)
@@ -91,7 +137,13 @@ def parse_commandline_args() -> argparse.Namespace:
     ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--lr", type=float, default=1e-4)
-    ap.add_argument("--resume", action="store_true", help="resume from out/last.pt if present")
+    ap.add_argument("--ckpt-dir", default=None,
+                    help="directory for the rolling seg_finetune_last.pt checkpoint "
+                         "(defaults to --out)")
+    ap.add_argument("--resume-from", default=None,
+                    help="checkpoint path to resume from; ignored if it does not exist")
+    ap.add_argument("--checkpoint-interval", type=int, default=CHECKPOINT_INTERVAL,
+                    help="save a regular checkpoint every N steps (0 disables interval saves)")
     args = ap.parse_args()
     return args
 
@@ -113,7 +165,6 @@ def build_model() -> nn.Module:
 
 
 def load_checkpoint(
-    start_epoch: int,
     ckpt: Path,
     device: str,
     model: nn.Module,
@@ -122,20 +173,27 @@ def load_checkpoint(
     """Restore model and optimizer state from a checkpoint, in place.
 
     Args:
-        start_epoch: Ignored; the resume epoch is read from the checkpoint.
         ckpt: Path to the `.pt` checkpoint saved by `train_model`.
         device: Device string ("cuda" or "cpu") to map the tensors onto.
         model: Model whose weights are loaded in place.
         opt: Optimizer whose state is loaded in place.
 
     Returns:
-        The epoch to resume training from (checkpoint epoch + 1).
+        The epoch to resume training from. If the checkpoint's epoch finished
+        (`epoch_completed`), that's `epoch + 1`; if it was a mid-epoch save
+        (interval or preemption), it's the same `epoch`, so we re-run that epoch
+        from step 0. We deliberately do NOT fast-forward the dataloader to the
+        saved `step`: with a shuffled loader the exact position isn't meaningful,
+        and restarting the epoch is simpler and correct.
     """
     state = torch.load(ckpt, map_location=device)
     model.load_state_dict(state["model"])
     opt.load_state_dict(state["opt"])
-    start_epoch = state["epoch"] + 1
-    print(f"[seg] resumed from epoch {start_epoch}")
+    # .get() defaults keep older {"model","opt","epoch"} checkpoints loadable.
+    epoch = state["epoch"]
+    epoch_completed = state.get("epoch_completed", True)
+    start_epoch = epoch + 1 if epoch_completed else epoch
+    print(f"[seg] resumed from epoch {start_epoch}", flush=True)
     return start_epoch
 
 
@@ -148,12 +206,19 @@ def train_model(
     opt: torch.optim.Optimizer,
     loss_fn: nn.Module,
     ckpt: Path,
+    checkpoint_interval: int,
 ) -> None:
-    """Run the fine-tuning loop, checkpointing after every epoch.
+    """Run the fine-tuning loop with interval, preemption, and epoch checkpoints.
 
     For each epoch, runs the predict -> loss -> backprop -> step cycle over every
-    batch, prints the mean epoch loss, and saves a checkpoint so a preempted job
-    can resume via `load_checkpoint`.
+    batch and prints the mean epoch loss. A checkpoint is written to the same
+    rolling `ckpt` path at three moments, so a preempted/requeued job can resume
+    via `load_checkpoint`:
+      1. On the preemption warning (SIGUSR2 sets `should_checkpoint`) -- save and
+         exit cleanly; the wrapper requeues the job.
+      2. Every `checkpoint_interval` steps -- a regular safety net (survives a
+         hard kill with no warning).
+      3. At the end of each epoch -- marked `epoch_completed` so resume advances.
 
     Args:
         start_epoch: First epoch index to run (0, or the resume point).
@@ -163,12 +228,13 @@ def train_model(
         device: Device string ("cuda" or "cpu") batches are moved to.
         opt: Optimizer applied each step.
         loss_fn: Per-pixel loss comparing logits to the label map.
-        ckpt: Path the per-epoch checkpoint is written to.
+        ckpt: Path the rolling checkpoint is written to.
+        checkpoint_interval: Save a regular checkpoint every N steps (0 disables).
     """
     for epoch in range(start_epoch, num_epochs):
         model.train()
         running = 0.0
-        for x, y in loader:
+        for step, (x, y) in enumerate(loader):
             x, y = x.to(device), y.to(device)
             opt.zero_grad()               # clear last steps gradients
             out_logits = model(x)["out"]  # forward: predict masks
@@ -176,23 +242,44 @@ def train_model(
             loss.backward()               # backward: compute gradient for every weight
             opt.step()                    # optimizer: nudge every weight to reduce loss
             running += loss.item()        # track loss
+
+            # 1. Preemption warning arrived: save at this safe point and exit
+            #    cleanly. The wrapper (which relayed the signal) handles the
+            #    requeue -- see slurm/03_checkpoint.sbatch (scontrol requeue).
+            if should_checkpoint:
+                atomic_torch_save({"model": model.state_dict(), "opt": opt.state_dict(),
+                                   "epoch": epoch, "step": step, "epoch_completed": False}, ckpt)
+                print("[seg] checkpoint saved on preemption warning; exiting for requeue.", flush=True)
+                sys.exit(0)
+
+            # 2. Regular interval checkpoint (safety net for a warning-less kill).
+            if checkpoint_interval and step > 0 and step % checkpoint_interval == 0:
+                atomic_torch_save({"model": model.state_dict(), "opt": opt.state_dict(),
+                                   "epoch": epoch, "step": step, "epoch_completed": False}, ckpt)
+
         avg = running / len(loader)
         print(f"[seg] epoch {epoch}  loss={avg:.4f}", flush=True)
-        torch.save({"model": model.state_dict(), "opt": opt.state_dict(),
-                    "epoch": epoch}, ckpt)  # checkpoint every epoch
+        # 3. End-of-epoch checkpoint: epoch_completed=True so resume advances to epoch+1.
+        atomic_torch_save({"model": model.state_dict(), "opt": opt.state_dict(),
+                           "epoch": epoch, "step": len(loader) - 1,
+                           "epoch_completed": True}, ckpt)
 
 
 def main() -> None:
     """Entry point: set up data/model/optimizer, optionally resume, then train.
 
     Builds the dataloader, model, and optimizer from the parsed arguments;
-    resumes from `out/last.pt` if `--resume` is set and a checkpoint exists;
-    runs training; then saves the final weights to `out/seg_finetune_model_final.pt`.
+    resumes from `--resume-from` if that checkpoint exists; runs training; then
+    saves the final weights to `out/seg_finetune_model_final.pt`.
     """
     start = datetime.datetime.now()
 
     # Define command line arguments
     args = parse_commandline_args()
+
+    # React to SLURM's preemption/time-limit warning (delivered as SIGUSR2 by the
+    # wrapper). Registered on the main thread, before training starts.
+    signal.signal(signal.SIGUSR2, handle_preempt)
 
     # Set up output directory and detect GPU vs. CPU device
     out = Path(args.out)
@@ -207,14 +294,20 @@ def main() -> None:
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
     loss_fn = nn.CrossEntropyLoss()
 
-    # Determine if an existing run was interrupted and load checkpoint
+    # Rolling checkpoint lives in --ckpt-dir (default --out). All three save sites
+    # in train_model overwrite this one path.
+    ckpt_dir = Path(args.ckpt_dir) if args.ckpt_dir else out
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    ckpt = ckpt_dir / "seg_finetune_last.pt"
+
+    # Resume if an explicit checkpoint was given and exists (preemption recovery).
     start_epoch = 0
-    ckpt = out / "seg_finetune_last.pt"
-    if args.resume and ckpt.exists():  # checkpoint recovery (preemption)
-        start_epoch = load_checkpoint(start_epoch, ckpt, device, model, opt)
+    if args.resume_from and Path(args.resume_from).exists():
+        start_epoch = load_checkpoint(Path(args.resume_from), device, model, opt)
 
     # Train the model
-    train_model(start_epoch, args.epochs, model, loader, device, opt, loss_fn, ckpt)
+    train_model(start_epoch, args.epochs, model, loader, device, opt, loss_fn,
+                ckpt, args.checkpoint_interval)
 
     # Save the final model state
     torch.save(model.state_dict(), out / "seg_finetune_model_final.pt")
