@@ -1,8 +1,8 @@
 # Workshop 1 — Interactive session walkthrough
 
 Before submitting batch jobs, get a feel for the cluster live. This is the
-"hello world" of the project: log in, grab a GPU interactively, run the model on
-*one* image.
+"hello world" of the project: log in, grab a GPU interactively, train the model
+on *one* basin.
 
 ## 1. Log into the cluster
 
@@ -63,7 +63,7 @@ nvidia-smi          # should list one GPU
 
 This is a quick preview of the data storage lesson which we will cover in more detail. For now, download the input data needed to run the workshop repository code to your laptop: https://drive.google.com/drive/folders/1kGueYViLp8cWjQhKCXsUP2wbJIt1BrBd?usp=share_link
 
-The data is on the smaller side (~61M) so lets just copy it via `scp`:
+The workshop mini-dataset is small (~5 MB) — the SWOT Confluence products sliced to two river basins (Loire + Rhine) — so let's just copy it via `scp`. It is three files: `eu_SOS_mini.nc` (algorithm discharge), `svs_mini.nc` (gauge observations), and `priors_mini.csv` (ML-prior features):
 
 ```bash
 mkdir /scratch/midway3/$USER/workshop-hpc-data/  # create a directory to hold the data
@@ -78,14 +78,23 @@ Modify `config/paths.sh` for the RCC cluster:
 ```bash
 #!/usr/bin/env bash
 
-# Raw inputs: images / masks / json / labels.csv.
+# Read-only project inputs: the workshop mini-dataset.
 export INPUT_DIR=/scratch/midway3/$USER/workshop-hpc-data/input
 
-# Where jobs write manifests, checkpoints, masks, results (scratch, NOT $HOME).
-export WORK_DIR=/scratch/midway3/$USER/workshop-hpc-data/output
+# SoS results (FLPE algorithm discharge + Confluence consensus).
+export SOS_FILE="$INPUT_DIR/eu_SOS_mini.nc"
 
-# Survey labels CSV, derived from INPUT_DIR so it always tracks the data.
-export LABELS="$INPUT_DIR/labels.csv"
+# SWOT Validation Set: observed daily gauge discharge = the training TARGET.
+export SVS_FILE="$INPUT_DIR/svs_mini.nc"
+
+# ML-prior flow statistics per reach (extra features).
+export PRIORS_FILE="$INPUT_DIR/priors_mini.csv"
+
+# Basins to process (SWORD prefixes): 2322 = Loire, 2326 = Rhine.
+export BASINS="2322 2326"
+
+# Where jobs write manifests, checkpoints, predictions, results (scratch, NOT $HOME).
+export WORK_DIR=/scratch/midway3/$USER/workshop-hpc-data/output
 
 # Conda/micromamba env (a name, or a full prefix path for a -p env).
 export ENV_NAME=/scratch/midway3/$USER/workshop-hpc-data/workshop-hpc-env
@@ -93,19 +102,21 @@ export ENV_NAME=/scratch/midway3/$USER/workshop-hpc-data/workshop-hpc-env
 mkdir -p "$WORK_DIR/data" "$WORK_DIR/runs"
 ```
 
-## 6. Run the model on one image
+## 6. Train the model on one basin
 
 ```bash
 # Load the paths you defined
 source config/paths.sh
 
-# Build the image/mask pairs manifest
-python src/build_manifest.py --input-dir "$INPUT_DIR" --mode train --limit 5 \
-    --out "$WORK_DIR"/tiny.csv
+# Build a tiny training manifest for a single sub-basin (232270 = upper Loire):
+# one row per (reach, SWOT overpass) with the algorithm discharges + gauge target.
+python src/build_manifest.py \
+    --sos "$SOS_FILE" --svs "$SVS_FILE" --priors "$PRIORS_FILE" \
+    --basins 232270 --mode train --out "$WORK_DIR"/tiny.csv
 
-# Fine tune the image segmentation model
-python src/seg_finetune.py --manifest "$WORK_DIR"/tiny.csv\
-    --out "$WORK_DIR"/seg --epochs 1
+# Train the learned-consensus model for a single epoch as a smoke test.
+python src/train_consensus.py --manifest "$WORK_DIR"/tiny.csv \
+    --out "$WORK_DIR"/consensus --epochs 1
 ```
 
 Watch the loss print. When it finishes, `exit` releases the node.
