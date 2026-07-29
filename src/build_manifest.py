@@ -189,31 +189,33 @@ def match_data(
         Manifest rows, each a list of values ordered to match `COLUMNS`.
     """
     rows: list[list] = []
-    for rid, rec in results.items():
-        matched = next((p for p in basins if str(rid).startswith(p)), None)
+    for reach_id, record in results.items():
+        matched = next((p for p in basins if str(reach_id).startswith(p)), None)
         if matched is None:
             continue
 
         basin = int(matched)  # group rows by the matched basin prefix
-        time_flat = flat(rec["times"])
-        series = {col: flat(s) for col, s in rec["algos"].items()}  # pre-flatten each reach's VLEN series once (aligned index-for-index with time_flat)
-        consensus_series = flat(rec["consensus"])
-        prior = priors.get(rid)
-        gauge = svs.get(rid, {})
+        time_flat = flat(record["times"])
 
-        for time in range(len(time_flat)):
-            time_unit = float(time_flat[time])
-            if not np.isfinite(time_unit) or time_unit == MISSING or time_unit <= 0:
+        series = {col: flat(s) for col, s in record["algos"].items()}  # pre-flatten each reach's VLEN series once (aligned index-for-index with time_flat)
+        consensus_series = flat(record["consensus"])
+
+        prior = priors.get(reach_id)
+        gauge = svs.get(reach_id, {})
+
+        for time_idx in range(len(time_flat)):
+            time = float(time_flat[time_idx])
+            if not np.isfinite(time) or time == MISSING or time <= 0:
                 continue  # skip fill-value overpass times
 
-            date = (SOS_EPOCH + dt.timedelta(seconds=time_unit)).date()
+            date = (SOS_EPOCH + dt.timedelta(seconds=time)).date()
             month = date.month
-            algos = {col: (clean(float(s[time])) if time < len(s) else np.nan)
+            algos = {col: (clean(float(s[time_idx])) if time_idx < len(s) else np.nan)
                         for col, s in series.items()}
 
             n_algo = sum(not np.isnan(v) for v in algos.values())
 
-            q_cons = clean(float(consensus_series[time])) if time < len(consensus_series) else np.nan
+            q_cons = clean(float(consensus_series[time_idx])) if time_idx < len(consensus_series) else np.nan
             g_vals = gauge.get(date, [])
             gauge_q = float(np.mean(g_vals)) if g_vals else np.nan
 
@@ -223,7 +225,7 @@ def match_data(
             if mode == "train" and (np.isnan(gauge_q) or n_algo < 2):
                 continue
 
-            rows.append([rid, basin, date.isoformat(), month,
+            rows.append([reach_id, basin, date.isoformat(), month,
                         algos["q_metroman"], algos["q_momma"], algos["q_neobam"],
                         algos["q_sic4dvar"], q_cons, p_mean, p_month, gauge_q])
 
