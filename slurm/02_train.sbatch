@@ -25,6 +25,11 @@ module load python/anaconda-2025.12
 module load cuda 2>/dev/null || echo "[job] no 'cuda' module; using conda torch's bundled CUDA"
 source activate "$ENV_NAME"           # conda env from environment.yml
 
+# Unbuffered stdout/stderr so print() and logging stream to the .out/.err files
+# live (block-buffering would otherwise hide progress until the buffer fills or
+# the job ends). Covers all python steps below, so no per-call flush needed.
+export PYTHONUNBUFFERED=1
+
 # 1. Build the TRAINING manifest: one row per (reach, SWOT overpass) for the two
 #    workshop basins, joining the FLPE algorithm discharges + ML-prior features
 #    with the observed gauge discharge TARGET (kept only where a gauge exists).
