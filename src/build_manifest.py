@@ -86,16 +86,16 @@ def load_svs(path: Path) -> dict[int, dict[dt.date, list[float]]]:
 
     # Reshape data so it is keyed by reach identifier
     out: dict[int, dict[dt.date, list[float]]] = {}
-    for s in range(len(reach)):
-        rid = int(reach[s])
-        if rid <= 0:
+    for s in range(len(reach)):        # walk each station row
+        rid = int(reach[s])            # the reach id this station belongs to
+        if rid <= 0:                   # skip fill/invalid reach ids (0 or negative)
             continue
-        per = out.setdefault(rid, {})
-        row = Q[s]
-        for k, q in enumerate(row):
-            qc = clean(float(q))
-            if not np.isnan(qc):
-                per.setdefault(dates[k], []).append(qc)
+        per = out.setdefault(rid, {})  # get this reach's date-dict (create {} if first time seen)
+        row = Q[s]                     # this station's discharge across all dates
+        for k, q in enumerate(row):    # walk each date's value
+            qc = clean(float(q))       # → NaN if it's a fill/invalid/non-positive value
+            if not np.isnan(qc):       # keep only valid readings
+                per.setdefault(dates[k], []).append(qc)   # append under that date
 
     ds.close()
     return out
