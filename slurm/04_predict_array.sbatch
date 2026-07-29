@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=consensus-predict
-#SBATCH --partition=general          # <-- your GPU partition
+#SBATCH --account=pi-dfreedman          # change to an allowed account on the cluster
+#SBATCH --partition=schmidt-gpu         # GPU partition for Schmidt fellows
+#SBATCH --qos=schmidt
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --time=00:30:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --time=02:00:00
 #SBATCH --array=0-9                  # 10 parallel tasks (Workshop 4: job arrays)
 #SBATCH --output=logs/predict_%A_%a.out   # %A=job id, %a=array index
+#SBATCH --error=logs/predict_%A_%a.err
 # --- Workshop 4: predict discharge for ALL reaches in the two basins, in
 #     parallel. Each array task handles ~1/10th of the reaches.
 #     sbatch slurm/04_predict_array.sbatch
@@ -31,7 +36,12 @@ python src/build_manifest.py \
     --mode infer \
     --out "$WORK_DIR/data/manifest_infer.csv"
 
-# Each array task predicts discharge for its stride of the manifest (GPU).
+# Coverage: $SLURM_ARRAY_TASK_COUNT is the TOTAL number of array tasks (10 here,
+# straight from --array=0-9), so we never hard-code it. predict_discharge strides
+# the manifest as rows[index::num_tasks]; tasks 0..N-1 with stride N tile EVERY
+# row exactly once -> all reaches get predicted. To scale, change ONLY --array
+# (e.g. 0-19) and the count follows. The array MUST start at 0 and be contiguous
+# (0-(N-1)) for the tiling to be complete.
 python src/predict_discharge.py \
     --manifest "$WORK_DIR/data/manifest_infer.csv" \
     --model "$WORK_DIR/runs/consensus/consensus_model_final.pt" \

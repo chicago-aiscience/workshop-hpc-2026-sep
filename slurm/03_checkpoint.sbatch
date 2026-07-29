@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=consensus-ckpt
-#SBATCH --partition=general          # use a preemptible partition to demo this
+#SBATCH --account=pi-dfreedman          # change to an allowed account on the cluster
+#SBATCH --partition=schmidt-gpu         # GPU partition for Schmidt fellows
+#SBATCH --qos=schmidt
 #SBATCH --gres=gpu:1
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=02:00:00
 #SBATCH --requeue                    # allow SLURM to put the job back in the queue
 #SBATCH --signal=B:USR2@120          # warn the batch shell (USR2) 120s before the kill
-#SBATCH --output=logs/ckpt_%j.out
+#SBATCH --output=logs/ckpt_%j.out   # stdout  -> normal log
+#SBATCH --error=logs/ckpt_%j.err    # stderr  -> error log
 # --- Lesson 3: surviving interruptions via checkpoint/resume + signal handling.
 #
 #     This is meant as a general pattern for cluster work. Clusters differ: some
