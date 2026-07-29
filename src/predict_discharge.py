@@ -1,87 +1,87 @@
 #!/usr/bin/env python3
-"""Run the fine-tuned segmenter over a list of images -> write predicted masks.
+"""Predict discharge for a index of reaches with the trained consensus model.
 
-Designed to be sharded by a SLURM job array: pass --shard / --num-shards and
-each array task segments its own slice of the manifest (Workshop 4).
+Loads the model saved by train_consensus.py and applies it to the inference
+manifest, writing predicted discharge per (reach, overpass). Designed to run as a
+SLURM job array (Workshop 4): each task takes a `--index` of the manifest rows so
+the reaches are processed in parallel. Runs on GPU when one is available.
 
-    python src/seg_infer.py --manifest data/manifest_infer.csv \
-        --model runs/seg/seg_finetune_model_final.pt --out-dir runs/masks \
-        --shard ${SLURM_ARRAY_TASK_ID:-0} --num-shards ${SLURM_ARRAY_TASK_COUNT:-1}
+    python src/predict_discharge.py --manifest data/manifest_infer.csv \
+        --model runs/consensus/consensus_model_final.pt \
+        --out-dir runs/predictions --index 0 --num-tasks 10
 """
 import argparse
-import csv
-import datetime
+import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import torch
-from PIL import Image
-from torchvision.transforms.functional import to_tensor, resize, normalize
 
-from seg_finetune import build_model, IMAGENET_MEAN, IMAGENET_STD
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _features import make_features           # noqa: E402
+from train_consensus import ConsensusMLP      # noqa: E402
+from utils import configure_logging
+
+# Columns carried through to the prediction output so downstream stages can score
+# the model against the gauge and against the naive-mean / consensus baselines.
+CARRY = ["reach_id", "basin", "date", "month",
+         "q_metroman", "q_momma", "q_neobam", "q_sic4dvar", "q_consensus", "gauge_q"]
 
 
-def parse_commandline_args() -> argparse.Namespace:
-    """Parse command-line arguments for an inference run.
-
-    Returns:
-        The parsed arguments: `manifest`, `model`, `out_dir`, and the
-        `shard` / `num_shards` job-array slice controls.
-    """
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for a prediction index."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--model", required=True)
-    ap.add_argument("--out-dir", default="runs/masks")
-    ap.add_argument("--shard", type=int, default=0,
-                    help="which slice this process handles (0-based)")
-    ap.add_argument("--num-shards", type=int, default=1,
-                    help="total number of slices the manifest is split into")
-    args = ap.parse_args()
-    return args
+    ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--index", type=int, default=0, help="this task's index (0-based)")
+    ap.add_argument("--num-tasks", type=int, default=1, help="total number of array tasks")
+    return ap.parse_args()
+
+
+def load_model(path: str, n_features: int, device: str) -> tuple[ConsensusMLP, list[str]]:
+    """Rebuild the MLP and load its weights + normalization buffers.
+
+    Args:
+        path: The `consensus_model_final.pt` saved by training.
+        n_features: Number of input features (must match training).
+        device: "cuda" or "cpu".
+
+    Returns:
+        The loaded model in eval mode and the training feature-name order.
+    """
+    state = torch.load(path, map_location=device)
+    # mean/std are restored from the checkpoint buffers, so seed with placeholders.
+    model = ConsensusMLP(n_features, np.zeros(n_features), np.ones(n_features)).to(device)
+    model.load_state_dict(state["model"])
+    model.eval()
+    return model, state["feature_names"]
 
 
 def main() -> None:
-    """Segment this shard's images and write a predicted mask for each.
+    """Predict discharge for this index's rows and write them to the output dir."""
+    args = parse_args()
+    logger = configure_logging("build_manifest")
+    for name, value in vars(args).items(): logger.info("%s = %s", name, value)
 
-    Loads the fine-tuned model, takes the `--shard`-th strided slice of the
-    manifest (so a SLURM job array can run many of these in parallel), and for
-    each image runs a forward pass, converts the per-pixel argmax to a {0, 255}
-    mask, resizes it back to the original image size, and saves it as
-    `<image-stem>_predmask.png` under `--out-dir`.
-    """
-    start = datetime.datetime.now()
-    # Parse command line arguments
-    args = parse_commandline_args()
-
-    # Set up output directory and GPU vs. CPU device
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Retrieve list of images and parallel batch to process
-    rows = list(csv.DictReader(open(args.manifest)))
-    subset = rows[args.shard::args.num_shards]  # strided slice for this array task
-    print(f"[infer] shard {args.shard}/{args.num_shards}: {len(subset)} images  device={device}")
+    df = pd.read_csv(args.manifest)
+    index = df.iloc[args.index::args.num_tasks].reset_index(drop=True)
+    logger.info(f"[predict] device={device} index {args.index}/{args.num_tasks} rows={len(index)}")
 
-    # Build the model, load previous state, and enter evaluation mode
-    model = build_model().to(device)
-    model.load_state_dict(torch.load(args.model, map_location=device))
-    model.eval()
+    X, _ = make_features(index)
+    model, _ = load_model(args.model, X.shape[1], device)
+    with torch.no_grad():
+        log_q = model(torch.from_numpy(X).to(device)).cpu().numpy()
+    index["predicted_q"] = np.expm1(log_q)               # invert the log1p target
 
-    with torch.no_grad():  # do not build the autograd graph
-        for row in subset:
-            img = Image.open(row["image_path"]).convert("RGB")
-            w, h = img.size                                                                 # Save original size
-            x = normalize(resize(to_tensor(img), (384, 512)), IMAGENET_MEAN, IMAGENET_STD)  # Resize and normalize
-            logits = model(x.unsqueeze(0).to(device))["out"]                                # Add a batch dimension and run forward pass
-            pred = logits.argmax(1)[0].cpu().numpy().astype("uint8") * 255                  # Pick the winning class and map to black/white mask
-            mask = Image.fromarray(pred).resize((w, h), Image.NEAREST)                      # Resize predicted mask back to original size
-            name = Path(row["image_path"]).stem + "_predmask.png"
-            mask.save(out_dir / name)
-
-    print(f"[infer] shard {args.shard} done -> {out_dir}")
-
-    end = datetime.datetime.now()
-    print(f"Elapsed time: {end - start}")
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"predictions_{args.index:03d}.csv"
+    index[CARRY + ["predicted_q"]].to_csv(out_path, index=False)
+    logger.info(f"[predict] wrote {out_path}")
 
 
 if __name__ == "__main__":
