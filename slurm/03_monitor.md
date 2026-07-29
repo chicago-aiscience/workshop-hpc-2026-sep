@@ -1,11 +1,11 @@
 # Workshop 2 — Monitoring, metrics, and recovery
 
-Use the fine-tune job (`02_finetune.sbatch`) as the running example.
+Use the training job (`02_train.sbatch`) as the running example.
 
 ## Submit and watch the queue
 
 ```bash
-sbatch slurm/02_finetune.sbatch       # prints: Submitted batch job <JOBID>
+sbatch slurm/02_train.sbatch       # prints: Submitted batch job <JOBID>
 squeue --me                           # your jobs, incl. the ST (state) column
 squeue -j <JOBID> --long                # one job, detailed
 scontrol show job <JOBID>               # full record: node, resources, reason
@@ -46,8 +46,8 @@ sinfo -N -o "%N %G %C %m"             # per-node: gres(GPU), CPUs, memory
 The job splits output by stream (see the `#SBATCH --output/--error` lines):
 
 ```bash
-tail -f logs/finetune_<JOBID>.out       # stdout: loss curve, progress
-tail -f logs/finetune_<JOBID>.err       # stderr: tracebacks, CUDA OOM, warnings
+tail -f logs/train_<JOBID>.out       # stdout: loss curve, progress
+tail -f logs/train_<JOBID>.err       # stderr: tracebacks, CUDA OOM, warnings
 ```
 
 Debugging rule of thumb: **`.out` tells you how far it got, `.err` tells you why
@@ -127,15 +127,15 @@ scancel --signal=USR2 --batch <JOBID>
 
 # 4. In logs/ckpt_<JOBID>.out you should see, in order:
 #      USR2 received: signalling Python to checkpoint...
-#      [seg] signal 12 received; checkpointing at next step boundary...
-#      [seg] checkpoint saved on preemption warning; exiting for requeue.
+#      [train] signal 12 received; checkpointing at next step boundary...
+#      [train] checkpoint saved on preemption warning; exiting for requeue.
 #      Requeuing job <JOBID> via scontrol requeue.
 
 # 5. Watch it come back on its own: squeue shows the SAME job id go PD -> R again,
-#    and the new run appends "Resuming from .../seg_finetune_last.pt" to the log.
+#    and the new run appends "Resuming from .../consensus_last.pt" to the log.
 squeue --me
 sacct -j <JOBID> --format=JobID,State,ExitCode,Restart%7   # Restart increments to 1
-ls -l "$WORK_DIR/runs/seg/seg_finetune_last.pt"
+ls -l "$WORK_DIR/runs/consensus/consensus_last.pt"
 ```
 
 Notes:

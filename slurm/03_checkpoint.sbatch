@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=seg-ckpt
+#SBATCH --job-name=consensus-ckpt
 #SBATCH --partition=general          # use a preemptible partition to demo this
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
@@ -21,7 +21,7 @@
 #       - Node failure      -> SLURM auto-requeues (--requeue); resume from the
 #                             last interval/epoch checkpoint.
 #
-#     src/seg_finetune.py saves a rolling checkpoint (seg_finetune_last.pt) on a
+#     src/train_consensus.py saves a rolling checkpoint (consensus_last.pt) on a
 #     regular interval, at each epoch boundary, AND when it receives the SIGUSR2
 #     warning -- then exits cleanly. This wrapper catches the same warning, waits
 #     for the checkpoint, and requeues the job with `scontrol requeue`. On restart
@@ -45,13 +45,27 @@ source config/paths.sh
 module load cuda 2>/dev/null || echo "[job] no 'cuda' module; using conda torch's bundled CUDA"
 source activate "$ENV_NAME"
 
+# Unbuffered stdout/stderr so print() and logging stream to the .out/.err files
+# live -- important here so checkpoint/preemption messages appear immediately
+# rather than being trapped in a buffer when the job is signalled.
+export PYTHONUNBUFFERED=1
+
 # --- Tunables ---------------------------------------------------------------
-CKPT_DIR="$WORK_DIR/runs/seg"        # where the rolling seg_finetune_last.pt lives
+CKPT_DIR="$WORK_DIR/runs/consensus"  # where the rolling consensus_last.pt lives
 CHECKPOINT_INTERVAL=50               # steps between regular checkpoints [EDIT ME]
 MAX_RESTARTS=5                       # stop requeuing after this many restarts
 # ----------------------------------------------------------------------------
 
 mkdir -p "$CKPT_DIR"
+
+# Build the training manifest if a previous stage hasn't already (idempotent),
+# so this job can also be submitted on its own.
+if [[ ! -f "$WORK_DIR/data/manifest_train.csv" ]]; then
+    python src/build_manifest.py \
+        --sos "$SOS_FILE" --svs "$SVS_FILE" --priors "$PRIORS_FILE" \
+        --basins $BASINS --mode train \
+        --out "$WORK_DIR/data/manifest_train.csv"
+fi
 
 # Guard against an infinite requeue loop: if the job keeps dying before making
 # progress, give up instead of resubmitting forever.
@@ -119,7 +133,7 @@ trap on_term TERM
 #      (The wrapper does the requeue; your program just saves and exits.)
 #   2. Resume from the checkpoint path passed in $1 (empty string => start fresh).
 #   3. Write its checkpoint(s) under $CKPT_DIR so the next run can find them.
-# See src/seg_finetune.py (handle_preempt / atomic_torch_save / --resume-from)
+# See src/train_consensus.py (handle_preempt / atomic_torch_save / --resume-from)
 # for a reference implementation.
 #
 # Keep the `setsid ... &` form: `setsid` makes the program its own process-group
@@ -131,18 +145,18 @@ launch_training() {
     local resume_args=()
     [[ -n "$resume_from" ]] && resume_args=(--resume-from "$resume_from")
 
-    setsid python src/seg_finetune.py \
+    setsid python src/train_consensus.py \
         --manifest "$WORK_DIR/data/manifest_train.csv" \
-        --out "$WORK_DIR/runs/seg" \
+        --out "$WORK_DIR/runs/consensus" \
         --ckpt-dir "$CKPT_DIR" \
         --checkpoint-interval "$CHECKPOINT_INTERVAL" \
-        --epochs 50 --batch-size 4 \
+        --epochs 500 --batch-size 256 \
         "${resume_args[@]}" &
 }
 # ============================================================================
 
 # Resume from the rolling checkpoint if one exists (a previous run left it here).
-latest_ckpt="$CKPT_DIR/seg_finetune_last.pt"
+latest_ckpt="$CKPT_DIR/consensus_last.pt"
 if [[ -f "$latest_ckpt" ]]; then
     echo "[$(date)] Resuming from $latest_ckpt (restart #${SLURM_RESTART_COUNT:-0})"
 else
