@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=seg-morph
+#SBATCH --job-name=consensus-aggregate
 #SBATCH --partition=general          # CPU-only stage; no --gres needed
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 #SBATCH --time=00:20:00
-#SBATCH --output=logs/morph_%j.out
-# --- Workshop 4: SLURM dependency. Run this ONLY after the inference array
+#SBATCH --output=logs/aggregate_%j.out
+# --- Workshop 4: SLURM dependency. Run this ONLY after the prediction array
 #     finishes, then submit the chain like:
 #
-#       aid=$(sbatch --parsable slurm/04_infer_array.sbatch)
-#       sbatch --dependency=afterok:$aid slurm/05_morphology_dep.sbatch
+#       aid=$(sbatch --parsable slurm/04_predict_array.sbatch)
+#       sbatch --dependency=afterok:$aid slurm/05_aggregate_dep.sbatch
 #
 #     `afterok` = start only if every array task succeeded.
 
@@ -17,20 +17,27 @@ set -euo pipefail
 source config/paths.sh
 source activate "$ENV_NAME"
 
-# Masks (from the array) -> area + circularity features.
-python src/morphology.py \
-    --mask-dir "$WORK_DIR/runs/masks" \
-    --out "$WORK_DIR/runs/morphology.csv"
+# Unbuffered stdout/stderr so aggregate/benchmark/evaluate output streams to the
+# .out file live rather than being held in a buffer until the job ends.
+export PYTHONUNBUFFERED=1
 
-# Features + survey labels -> supervised quality classifier (grouped by organoid).
-python src/classify.py \
-    --features "$WORK_DIR/runs/morphology.csv" \
-    --labels "$LABELS" \
-    --out "$WORK_DIR/runs/classified.csv"
+# Per-shard predictions (from the array) -> one tidy per-reach discharge table.
+python src/aggregate_discharge.py \
+    --pred-dir "$WORK_DIR/runs/predictions" \
+    --out "$WORK_DIR/runs/discharge.csv"
 
-# Evaluate + plot: confusion matrix, balanced accuracy / TNR, feature importance.
+# Score the learned consensus against the gauge TARGET, alongside the naive
+# multi-algorithm mean and Confluence's own consensus baselines (all scored on the
+# same rows, per basin and overall).
+python src/benchmark_consensus.py \
+    --discharge "$WORK_DIR/runs/discharge.csv" \
+    --out "$WORK_DIR/runs/scored.csv"
+
+# Evaluate + plot: hydrographs, predicted-vs-observed scatter, per-basin skill
+# (NSE / KGE / RMSE), learned-vs-baseline comparison.
 python src/evaluate.py \
-    --classified "$WORK_DIR/runs/classified.csv" \
+    --discharge "$WORK_DIR/runs/discharge.csv" \
+    --scored "$WORK_DIR/runs/scored.csv" \
     --out-dir "$WORK_DIR/runs/eval"
 
 echo "pipeline complete -> $WORK_DIR/runs/eval"

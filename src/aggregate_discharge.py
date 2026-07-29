@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Concatenate every prediction shard into a single sorted discharge table."""
     args = parse_args()
-    logger = configure_logging("build_manifest")
+    logger = configure_logging("aggregate_discharge")
     for name, value in vars(args).items(): logger.info("%s = %s", name, value)
 
     indexes = sorted(Path(args.pred_dir).glob("predictions_*.csv"))
