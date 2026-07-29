@@ -25,8 +25,11 @@ from utils import configure_logging
 
 # Columns carried through to the prediction output so downstream stages can score
 # the model against the gauge and against the naive-mean / consensus baselines.
+# `q_consensus` is carried as a BASELINE only -- it is not a model input feature.
 CARRY = ["reach_id", "basin", "date", "month",
          "q_metroman", "q_momma", "q_neobam", "q_sic4dvar", "q_consensus", "gauge_q"]
+
+logger = configure_logging("predict_discharge")
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,29 +43,46 @@ def parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
-def load_model(path: str, n_features: int, device: str) -> tuple[ConsensusMLP, list[str]]:
+def load_model(path: str, feature_names: list[str], device: str) -> ConsensusMLP:
     """Rebuild the MLP and load its weights + normalization buffers.
+
+    Asserts the checkpoint's feature order matches `feature_names` (what
+    `make_features` produces now), so a model trained on a different feature set
+    -- e.g. an old checkpoint that still included `q_consensus` -- fails loudly
+    here instead of silently mispredicting on mismatched inputs.
 
     Args:
         path: The `consensus_model_final.pt` saved by training.
-        n_features: Number of input features (must match training).
+        feature_names: The feature column order from the current `make_features`.
         device: "cuda" or "cpu".
 
     Returns:
-        The loaded model in eval mode and the training feature-name order.
+        The loaded model in eval mode.
     """
     state = torch.load(path, map_location=device)
+
+    # Detect feature mismatch between training and prediction
+    saved = state.get("feature_names")
+    if saved is None:
+        logger.warning("[predict] checkpoint has no feature_names; skipping feature check.")
+
+    elif list(saved) != list(feature_names):
+        raise SystemExit(
+            f"[predict] feature mismatch: model was trained on {list(saved)} but "
+            f"make_features now produces {list(feature_names)}. Retrain the model.")
+
     # mean/std are restored from the checkpoint buffers, so seed with placeholders.
+    n_features = len(feature_names)
     model = ConsensusMLP(n_features, np.zeros(n_features), np.ones(n_features)).to(device)
     model.load_state_dict(state["model"])
     model.eval()
-    return model, state["feature_names"]
+
+    return model
 
 
 def main() -> None:
     """Predict discharge for this index's rows and write them to the output dir."""
     args = parse_args()
-    logger = configure_logging("build_manifest")
     for name, value in vars(args).items(): logger.info("%s = %s", name, value)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -71,8 +91,8 @@ def main() -> None:
     index = df.iloc[args.index::args.num_tasks].reset_index(drop=True)
     logger.info(f"[predict] device={device} index {args.index}/{args.num_tasks} rows={len(index)}")
 
-    X, _ = make_features(index)
-    model, _ = load_model(args.model, X.shape[1], device)
+    X, names = make_features(index)
+    model = load_model(args.model, names, device)
     with torch.no_grad():
         log_q = model(torch.from_numpy(X).to(device)).cpu().numpy()
     index["predicted_q"] = np.expm1(log_q)               # invert the log1p target

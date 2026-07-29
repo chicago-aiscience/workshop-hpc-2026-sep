@@ -15,10 +15,16 @@ import pandas as pd
 
 # Raw discharge columns used as model inputs (all in m^3/s, log-transformed
 # below because river discharge spans several orders of magnitude). The four
-# FLPE algorithms + Confluence's consensus + the ML-prior flow stats.
+# FLPE algorithms + the ML-prior flow stats.
+#
+# NOTE: Confluence's own consensus (`q_consensus`) is deliberately NOT an input.
+# The learned model IS a consensus, so feeding it Confluence's consensus would be
+# circular and would confound the head-to-head benchmark. `q_consensus` is still
+# carried through the manifest/predictions and used as a BASELINE in
+# benchmark_consensus.py -- just never as a feature.
 DISCHARGE_COLS: list[str] = [
     "q_metroman", "q_momma", "q_neobam", "q_sic4dvar",
-    "q_consensus", "prior_mean_q", "prior_monthly_q",
+    "prior_mean_q", "prior_monthly_q",
 ]
 # The FLPE algorithm subset, used for row-median imputation and the naive-mean
 # baseline in benchmark_consensus.py.
