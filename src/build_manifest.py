@@ -115,21 +115,23 @@ def load_priors(path: Path | None) -> dict[int, tuple[float, list[float]]]:
     return out
 
 
-def load_results(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, np.ndarray]]:
-    """Load the SoS results needed to build the manifest.
+def load_results(path: Path) -> dict[int, dict]:
+    """Load the SoS results needed to build the manifest, keyed by reach.
+
+    Returned in the same reach-keyed shape as `load_svs` and `load_priors` so all
+    three inputs join on reach_id the same way.
 
     Args:
         path: The SoS results netCDF (mini or full).
 
     Returns:
-        A 4-tuple of:
-          * reach_id: per-reach identifiers (v16), shape (n_reach,).
-          * times: per-reach overpass times (seconds since 2000-01-01); a VLEN
-            array, one variable-length series per reach.
-          * cons: per-reach Confluence consensus discharge, aligned index-for-index
-            with `times`.
-          * algo_series: FLPE-algorithm discharges keyed by manifest column name
-            (see `FLPE`), each a per-reach VLEN series aligned with `times`.
+        A dict mapping each reach_id (v16) to a record with:
+          * ``"times"``: that reach's overpass times (seconds since 2000-01-01), a
+            variable-length (VLEN) series.
+          * ``"consensus"``: that reach's Confluence consensus discharge, aligned
+            index-for-index with ``"times"``.
+          * ``"algos"``: FLPE-algorithm discharges keyed by manifest column name
+            (see `FLPE`), each aligned index-for-index with ``"times"``.
     """
     ds = nc.Dataset(path)
     ds.set_auto_mask(False)
@@ -146,16 +148,22 @@ def load_results(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[s
         algo_series[col] = node[var][:]
     ds.close()
 
-    return reach_id, times, cons, algo_series
+    # Restructure the reach-aligned arrays into one record per reach, so callers
+    # look results up by reach_id instead of by array position.
+    return {
+        int(reach_id[i]): {
+            "times": times[i],
+            "consensus": cons[i],
+            "algos": {col: algo_series[col][i] for col in FLPE},
+        }
+        for i in range(len(reach_id))
+    }
 
 def match_data(
-    reach_id: np.ndarray,
+    results: dict[int, dict],
     basins: list[str],
-    algo_series: dict[str, np.ndarray],
-    times: np.ndarray,
     svs: dict[int, dict[dt.date, list[float]]],
     priors: dict[int, tuple[float, list[float]]],
-    consensus: np.ndarray,
     mode: str,
 ) -> list[list]:
     """Join the SoS/SVS/priors into one manifest row per (reach, overpass).
@@ -168,14 +176,12 @@ def match_data(
     and at least two valid algorithm discharges.
 
     Args:
-        reach_id: Per-reach identifiers (v16), as returned by `load_results`.
+        results: Per-reach SoS records, reach_id -> {"times", "consensus",
+            "algos"}, as returned by `load_results`.
         basins: SWORD basin prefixes to include; a reach is kept if its id starts
             with any prefix.
-        algo_series: FLPE-algorithm VLEN series keyed by manifest column name.
-        times: Per-reach overpass times (seconds since 2000-01-01), VLEN.
         svs: Gauge discharge lookup, reach_id -> {date -> [daily Q]}.
         priors: ML-prior stats lookup, reach_id -> (mean_q, [monthly_q x12]).
-        consensus: Per-reach Confluence consensus discharge, VLEN.
         mode: ``"train"`` (keep gauged rows with >=2 algorithms) or ``"infer"``
             (keep all reaches).
 
@@ -183,16 +189,15 @@ def match_data(
         Manifest rows, each a list of values ordered to match `COLUMNS`.
     """
     rows: list[list] = []
-    for i, rid in enumerate(reach_id):
-        rid = int(rid)
+    for rid, rec in results.items():
         matched = next((p for p in basins if str(rid).startswith(p)), None)
         if matched is None:
             continue
 
         basin = int(matched)  # group rows by the matched basin prefix
-        time_flat = flat(times[i])
-        series = {col: flat(s[i]) for col, s in algo_series.items()} # pre-flatten each reach's VLEN series once (aligned index-for-index with t)
-        consensus_series = flat(consensus[i])
+        time_flat = flat(rec["times"])
+        series = {col: flat(s) for col, s in rec["algos"].items()}  # pre-flatten each reach's VLEN series once (aligned index-for-index with time_flat)
+        consensus_series = flat(rec["consensus"])
         prior = priors.get(rid)
         gauge = svs.get(rid, {})
 
@@ -253,10 +258,10 @@ def main() -> None:
     basins = list(args.basins)
     svs = load_svs(Path(args.svs))
     priors = load_priors(Path(args.priors) if args.priors else None)
-    reach_id, times, consensus, algo_series = load_results(Path(args.sos))
+    results = load_results(Path(args.sos))
 
     # Match up input source data
-    rows = match_data(reach_id, basins, algo_series, times, svs, priors, consensus, args.mode)
+    rows = match_data(results, basins, svs, priors, args.mode)
 
     # Write intermediate file with formatted and aligned input data
     n_reach = write_output(args.out, rows)
