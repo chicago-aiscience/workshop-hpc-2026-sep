@@ -23,10 +23,11 @@ export SVS_FILE="$INPUT_DIR/svs_mini.nc"
 # ML-prior flow statistics per reach (mean_q, monthly_q) used as extra features.
 export PRIORS_FILE="$INPUT_DIR/priors_mini.csv"
 
-# The two basins for this run (SWORD Pfafstetter basin prefixes, any level):
-#   2322 = Loire, 2326 = Rhine -- two large, well-gauged French/Central-European
-#   river basins. Space-separated; the job array fans out over their reaches.
-export BASINS="2322 2326"
+# Experiment config: model + training knobs AND data.basins, tracked in Git.
+# Copy config/experiments/baseline.yaml to define a new experiment. Path is
+# relative to the repo root, where jobs run (same as the src/... paths the
+# scripts call). Per-run override: pass --basins / --epochs / etc. to a script.
+export EXPERIMENT_CONFIG="config/experiments/baseline.yaml"
 
 # Where jobs write manifests, checkpoints, predictions, results (scratch, NOT $HOME).
 export WORK_DIR=/data/workshop-hpc-data/confluence-mini/output

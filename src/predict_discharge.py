@@ -71,9 +71,14 @@ def load_model(path: str, feature_names: list[str], device: str) -> ConsensusMLP
             f"[predict] feature mismatch: model was trained on {list(saved)} but "
             f"make_features now produces {list(feature_names)}. Retrain the model.")
 
+    # Rebuild with the SAME hidden width training used (stamped in the checkpoint
+    # config); fall back to the class default for older checkpoints.
+    hidden = state.get("config", {}).get("model", {}).get("hidden", 64)
+
     # mean/std are restored from the checkpoint buffers, so seed with placeholders.
     n_features = len(feature_names)
-    model = ConsensusMLP(n_features, np.zeros(n_features), np.ones(n_features)).to(device)
+    model = ConsensusMLP(n_features, np.zeros(n_features), np.ones(n_features),
+                         hidden=hidden).to(device)
     model.load_state_dict(state["model"])
     model.eval()
 

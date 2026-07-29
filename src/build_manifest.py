@@ -25,6 +25,7 @@ import numpy as np
 import netCDF4 as nc
 
 from utils import configure_logging
+from config import load_config, apply_overrides
 
 MISSING = -999999999999.0
 SOS_EPOCH = dt.datetime(2000, 1, 1)          # SoS reaches/time units
@@ -57,8 +58,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--sos", required=True, help="SoS results netCDF (mini or full)")
     ap.add_argument("--svs", required=True, help="SWOT Validation Set netCDF (gauge target)")
     ap.add_argument("--priors", default=None, help="priors_mini.csv (ML-prior features); optional")
-    ap.add_argument("--basins", nargs="+", type=str, required=True,
-                    help="SWORD basin prefixes to include (any level), e.g. 2322 2326")
+    ap.add_argument("--config", default=None,
+                    help="experiment YAML (config/experiments/*.yaml); supplies data.basins")
+    ap.add_argument("--basins", nargs="+", type=str, default=None,
+                    help="SWORD basin prefixes, e.g. 2322 2326; overrides the config's data.basins")
     ap.add_argument("--mode", choices=["train", "infer"], required=True,
                     help="train: keep gauged rows with >=2 algorithms; infer: keep all reaches")
     ap.add_argument("--out", required=True)
@@ -256,8 +259,13 @@ def main() -> None:
     logger = configure_logging("build_manifest")
     for name, value in vars(args).items(): logger.info("%s = %s", name, value)
 
+    # Resolve config: DEFAULTS <- YAML <- CLI --basins. Basins are stored as strings
+    # because reach-id matching uses str(rid).startswith(prefix).
+    cfg = load_config(args.config)
+    apply_overrides(cfg, [("data.basins", args.basins)])
+    basins = [str(b) for b in cfg["data"]["basins"]]
+
     # Load input data
-    basins = list(args.basins)
     svs = load_svs(Path(args.svs))
     priors = load_priors(Path(args.priors) if args.priors else None)
     results = load_results(Path(args.sos))

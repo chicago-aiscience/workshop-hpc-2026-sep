@@ -22,5 +22,6 @@ dependencies:
   - scikit-learn=1.7.*
   - netcdf4=1.7.*
   - tqdm=4.67.*
+  - pyyaml=6.*
   - pip:
       - torch==2.8.*

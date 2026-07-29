@@ -26,8 +26,9 @@ export PYTHONUNBUFFERED=1
 # Build the full INFERENCE manifest once (every reach in the basins, no target
 # filtering; idempotent).
 python src/build_manifest.py \
+    --config "$EXPERIMENT_CONFIG" \
     --sos "$SOS_FILE" --svs "$SVS_FILE" --priors "$PRIORS_FILE" \
-    --basins $BASINS --mode infer \
+    --mode infer \
     --out "$WORK_DIR/data/manifest_infer.csv"
 
 # Each array task predicts discharge for its stride of the manifest (GPU).
@@ -35,5 +36,5 @@ python src/predict_discharge.py \
     --manifest "$WORK_DIR/data/manifest_infer.csv" \
     --model "$WORK_DIR/runs/consensus/consensus_model_final.pt" \
     --out-dir "$WORK_DIR/runs/predictions" \
-    --shard "$SLURM_ARRAY_TASK_ID" \
-    --num-shards "$SLURM_ARRAY_TASK_COUNT"
+    --index "$SLURM_ARRAY_TASK_ID" \
+    --num-tasks "$SLURM_ARRAY_TASK_COUNT"

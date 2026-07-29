@@ -29,11 +29,10 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from utils import configure_logging
 
-# _features lives beside this script; import works when run as `python src/...`.
+# _features / config live beside this script; import works when run as `python src/...`.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _features import make_features, make_target  # noqa: E402
-
-CHECKPOINT_INTERVAL: int = 50
+from config import load_config, apply_overrides, save_config    # noqa: E402
 
 logger = configure_logging("train_consensus")
 
@@ -99,14 +98,19 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--out", default="runs/consensus")
-    ap.add_argument("--epochs", type=int, default=50)
-    ap.add_argument("--batch-size", type=int, default=256)
-    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--config", default=None,
+                    help="experiment YAML (config/experiments/*.yaml); supplies model+train knobs")
+    # Hyperparameters below default to None: unset -> take the config/DEFAULTS value;
+    # set -> override the config for this run.
+    ap.add_argument("--epochs", type=int, default=None)
+    ap.add_argument("--batch-size", type=int, default=None)
+    ap.add_argument("--lr", type=float, default=None)
+    ap.add_argument("--hidden", type=int, default=None, help="width of the MLP hidden layers")
     ap.add_argument("--ckpt-dir", default=None,
                     help="directory for the rolling consensus_last.pt (defaults to --out)")
     ap.add_argument("--resume-from", default=None,
                     help="checkpoint path to resume from; ignored if it does not exist")
-    ap.add_argument("--checkpoint-interval", type=int, default=CHECKPOINT_INTERVAL,
+    ap.add_argument("--checkpoint-interval", type=int, default=None,
                     help="save a regular checkpoint every N steps (0 disables interval saves)")
     return ap.parse_args()
 
@@ -195,10 +199,10 @@ def build_dataloader(manifest: str, batch_size: int
     return loader, names, mean, std
 
 
-def build_model(n_features: int, mean: np.ndarray, std: np.ndarray, lr: float, device: str
-                ) -> tuple[nn.Module, torch.optim.Optimizer, nn.Module]:
+def build_model(n_features: int, mean: np.ndarray, std: np.ndarray, lr: float, device: str,
+                hidden: int) -> tuple[nn.Module, torch.optim.Optimizer, nn.Module]:
     """Build the MLP (with standardization buffers), Adam optimizer, and MSE loss."""
-    model = ConsensusMLP(n_features, mean, std).to(device)
+    model = ConsensusMLP(n_features, mean, std, hidden=hidden).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.MSELoss()
     return model, opt, loss_fn
@@ -225,11 +229,15 @@ def prepare_checkpointing(args: argparse.Namespace, out: Path, device: str,
     return ckpt, start_epoch
 
 
-def save_final_model(model: nn.Module, names: list[str], out: Path) -> Path:
-    """Save the final weights + feature names (so prediction reads the right columns)."""
+def save_final_model(model: nn.Module, names: list[str], cfg: dict, out: Path) -> Path:
+    """Save final weights + feature names + the resolved config (self-describing artifact).
+
+    Stamping `cfg` lets prediction rebuild the exact architecture (e.g. the hidden
+    width) and keeps the run's knobs traveling with the checkpoint.
+    """
     path = out / "consensus_model_final.pt"
     torch.save({"model": model.state_dict(), "feature_names": names,
-                "target": "log1p_gauge_q"}, path)
+                "target": "log1p_gauge_q", "config": cfg}, path)
     return path
 
 
@@ -239,21 +247,33 @@ def main() -> None:
     args = parse_args()
     for name, value in vars(args).items(): logger.info("%s = %s", name, value)
 
+    # Resolve config: DEFAULTS <- YAML <- explicit CLI flags.
+    cfg = load_config(args.config)
+    apply_overrides(cfg, [
+        ("model.hidden", args.hidden),
+        ("train.epochs", args.epochs),
+        ("train.batch_size", args.batch_size),
+        ("train.lr", args.lr),
+        ("train.checkpoint_interval", args.checkpoint_interval),
+    ])
+    mcfg, tcfg = cfg["model"], cfg["train"]
+
     signal.signal(signal.SIGUSR2, handle_preempt)   # checkpoint on preemption warning
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    save_config(cfg, out / "config_used.yaml")      # record the resolved knobs beside the run
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"[train] device={device}")
 
-    loader, names, mean, std = build_dataloader(args.manifest, args.batch_size)
-    model, opt, loss_fn = build_model(len(names), mean, std, args.lr, device)
+    loader, names, mean, std = build_dataloader(args.manifest, tcfg["batch_size"])
+    model, opt, loss_fn = build_model(len(names), mean, std, tcfg["lr"], device, mcfg["hidden"])
     ckpt, start_epoch = prepare_checkpointing(args, out, device, model, opt)
 
-    train_model(start_epoch, args.epochs, model, loader, device, opt, loss_fn,
-                ckpt, names, args.checkpoint_interval)
+    train_model(start_epoch, tcfg["epochs"], model, loader, device, opt, loss_fn,
+                ckpt, names, tcfg["checkpoint_interval"])
 
-    final = save_final_model(model, names, out)
+    final = save_final_model(model, names, cfg, out)
     logger.info(f"[train] done -> {final}  ({datetime.datetime.now() - start})")
 
 

@@ -34,15 +34,18 @@ export PYTHONUNBUFFERED=1
 #    workshop basins, joining the FLPE algorithm discharges + ML-prior features
 #    with the observed gauge discharge TARGET (kept only where a gauge exists).
 python src/build_manifest.py \
+    --config "$EXPERIMENT_CONFIG" \
     --sos "$SOS_FILE" --svs "$SVS_FILE" --priors "$PRIORS_FILE" \
-    --basins $BASINS --mode train \
+    --mode train \
     --out "$WORK_DIR/data/manifest_train.csv"
 
-# 2. Train the learned-consensus MLP (a plain fresh run). Preemption-resilient
+# 2. Train the learned-consensus MLP (a plain fresh run). Model + training knobs
+#    (epochs, batch size, lr, hidden) come from the experiment config; pass a
+#    flag like --epochs to override it for a one-off. Preemption-resilient
 #    checkpoint/resume is demonstrated separately in slurm/03_checkpoint.sbatch.
 python src/train_consensus.py \
+    --config "$EXPERIMENT_CONFIG" \
     --manifest "$WORK_DIR/data/manifest_train.csv" \
-    --out "$WORK_DIR/runs/consensus" \
-    --epochs 500 --batch-size 256
+    --out "$WORK_DIR/runs/consensus"
 
 echo "training complete on $(hostname) job $SLURM_JOB_ID"

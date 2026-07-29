@@ -1,0 +1,17 @@
+# Baseline experiment config for the learned-consensus pipeline.
+#
+# Copy this file, tweak a knob, and commit it to define a NEW experiment
+# (e.g. config/experiments/wider.yaml with hidden: 128). Git then diffs
+# experiments cleanly.
+#
+# Precedence: these values override the code DEFAULTS in src/config.py; an
+# explicit CLI flag (e.g. --lr 3e-4) overrides these.
+data:
+  basins: [2322, 2326]          # SWORD basin prefixes (2322 = Loire, 2326 = Rhine)
+model:
+  hidden: 64                    # width of the MLP's two hidden layers
+train:
+  epochs: 500
+  batch_size: 256
+  lr: 1.0e-3
+  checkpoint_interval: 50       # steps between rolling checkpoints (0 disables)

@@ -52,8 +52,9 @@ export PYTHONUNBUFFERED=1
 
 # --- Tunables ---------------------------------------------------------------
 CKPT_DIR="$WORK_DIR/runs/consensus"  # where the rolling consensus_last.pt lives
-CHECKPOINT_INTERVAL=50               # steps between regular checkpoints [EDIT ME]
 MAX_RESTARTS=5                       # stop requeuing after this many restarts
+# Model + training knobs (incl. checkpoint_interval) live in $EXPERIMENT_CONFIG;
+# edit config/experiments/baseline.yaml to change them (or pass a CLI flag above).
 # ----------------------------------------------------------------------------
 
 mkdir -p "$CKPT_DIR"
@@ -62,8 +63,9 @@ mkdir -p "$CKPT_DIR"
 # so this job can also be submitted on its own.
 if [[ ! -f "$WORK_DIR/data/manifest_train.csv" ]]; then
     python src/build_manifest.py \
+        --config "$EXPERIMENT_CONFIG" \
         --sos "$SOS_FILE" --svs "$SVS_FILE" --priors "$PRIORS_FILE" \
-        --basins $BASINS --mode train \
+        --mode train \
         --out "$WORK_DIR/data/manifest_train.csv"
 fi
 
@@ -146,11 +148,10 @@ launch_training() {
     [[ -n "$resume_from" ]] && resume_args=(--resume-from "$resume_from")
 
     setsid python src/train_consensus.py \
+        --config "$EXPERIMENT_CONFIG" \
         --manifest "$WORK_DIR/data/manifest_train.csv" \
         --out "$WORK_DIR/runs/consensus" \
         --ckpt-dir "$CKPT_DIR" \
-        --checkpoint-interval "$CHECKPOINT_INTERVAL" \
-        --epochs 500 --batch-size 256 \
         "${resume_args[@]}" &
 }
 # ============================================================================

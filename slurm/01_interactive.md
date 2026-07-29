@@ -90,8 +90,8 @@ export SVS_FILE="$INPUT_DIR/svs_mini.nc"
 # ML-prior flow statistics per reach (extra features).
 export PRIORS_FILE="$INPUT_DIR/priors_mini.csv"
 
-# Basins to process (SWORD prefixes): 2322 = Loire, 2326 = Rhine.
-export BASINS="2322 2326"
+# Experiment config: model + training knobs AND data.basins, tracked in Git.
+export EXPERIMENT_CONFIG="config/experiments/baseline.yaml"
 
 # Where jobs write manifests, checkpoints, predictions, results (scratch, NOT $HOME).
 export WORK_DIR=/scratch/midway3/$USER/workshop-hpc-data/output
@@ -110,13 +110,20 @@ source config/paths.sh
 
 # Build a tiny training manifest for a single sub-basin (232270 = upper Loire):
 # one row per (reach, SWOT overpass) with the algorithm discharges + gauge target.
+# The experiment config supplies data.basins; --basins here OVERRIDES it to just
+# the one sub-basin for a fast smoke test.
 python src/build_manifest.py \
+    --config "$EXPERIMENT_CONFIG" \
     --sos "$SOS_FILE" --svs "$SVS_FILE" --priors "$PRIORS_FILE" \
     --basins 232270 --mode train --out "$WORK_DIR"/tiny.csv
 
 # Train the learned-consensus model for a single epoch as a smoke test.
-python src/train_consensus.py --manifest "$WORK_DIR"/tiny.csv \
+# The config supplies epochs/batch_size/lr/hidden; --epochs 1 overrides it here.
+python src/train_consensus.py \
+    --config "$EXPERIMENT_CONFIG" \
+    --manifest "$WORK_DIR"/tiny.csv \
     --out "$WORK_DIR"/consensus --epochs 1
 ```
 
-Watch the loss print. When it finishes, `exit` releases the node.
+Watch the loss print. When it finishes, `exit` releases the node. The exact knobs
+this run used are recorded at `"$WORK_DIR"/consensus/config_used.yaml`.
