@@ -24,6 +24,8 @@ from pathlib import Path
 import numpy as np
 import netCDF4 as nc
 
+from utils import configure_logging
+
 MISSING = -999999999999.0
 SOS_EPOCH = dt.datetime(2000, 1, 1)          # SoS reaches/time units
 SVS_EPOCH = dt.date(2023, 1, 1)              # SVS time units (days since)
@@ -37,19 +39,7 @@ FLPE = {
 COLUMNS = ["reach_id", "basin", "date", "month",
            "q_metroman", "q_momma", "q_neobam", "q_sic4dvar",
            "q_consensus", "prior_mean_q", "prior_monthly_q", "gauge_q"]
-LOGGER = logging.getLogger("cit")
 
-def configure_logging(verbose: bool = False) -> None:
-    """Configure root logging: INFO by default, DEBUG when `verbose` is set.
-
-    Args:
-        verbose: When True, lower the log level to DEBUG.
-    """
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
 
 def flat(x: object) -> np.ndarray:
     """Return a netCDF value (possibly a VLEN element) as a 1-D float array."""
@@ -72,7 +62,6 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--mode", choices=["train", "infer"], required=True,
                     help="train: keep gauged rows with >=2 algorithms; infer: keep all reaches")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--verbose", action="store_true", help="enable DEBUG-level logging")
     return ap.parse_args()
 
 
@@ -257,8 +246,8 @@ def main() -> None:
     """Read the SoS/SVS/priors, join per (reach, overpass), and write the manifest."""
     # Command line arguments + logging
     args = parse_args()
-    configure_logging(args.verbose)
-    for name, value in vars(args).items(): LOGGER.info("%s = %s", name, value)
+    logger = configure_logging("build_manifest")
+    for name, value in vars(args).items(): logger.info("%s = %s", name, value)
 
     # Load input data
     basins = list(args.basins)
@@ -271,7 +260,7 @@ def main() -> None:
 
     # Write intermediate file with formatted and aligned input data
     n_reach = write_output(args.out, rows)
-    print(f"[manifest] mode={args.mode} rows={len(rows)} reaches={n_reach} -> {args.out}")
+    logger.info(f"[manifest] mode={args.mode} rows={len(rows)} reaches={n_reach} -> {args.out}")
 
 
 if __name__ == "__main__":
