@@ -46,8 +46,10 @@ def skill(obs: np.ndarray, sim: np.ndarray) -> dict[str, float]:
         sim: Estimated discharge.
 
     Returns:
-        Dict with `n`, `nse`, `kge`, `rmse`, `pbias` (NaN-safe: metrics are NaN if
-        fewer than three valid pairs remain).
+        Dict with `n`, `nse`, `kge`, the three KGE components `kge_r`, `kge_alpha`,
+        `kge_beta` (each ideally 1; the one furthest from 1 is what limits KGE),
+        `rmse`, and `pbias` (NaN-safe: metrics are NaN if fewer than three valid
+        pairs remain).
     """
     # Keep only paired rows valid on BOTH sides: finite and positive discharge.
     # `o`/`s` are the aligned observed/simulated values used by every metric below.
@@ -57,7 +59,9 @@ def skill(obs: np.ndarray, sim: np.ndarray) -> dict[str, float]:
     # Too few pairs to say anything meaningful (correlation/variance are unstable);
     # report the count and NaN out the metrics rather than emit noise.
     if len(o) < 3:
-        return {"n": int(len(o)), "nse": np.nan, "kge": np.nan, "rmse": np.nan, "pbias": np.nan}
+        return {"n": int(len(o)), "nse": np.nan, "kge": np.nan,
+                "kge_r": np.nan, "kge_alpha": np.nan, "kge_beta": np.nan,
+                "rmse": np.nan, "pbias": np.nan}
 
     # RMSE: root-mean-square error, in m^3/s. Typical error magnitude; 0 is perfect,
     # lower is better. Squaring penalizes large misses most.
@@ -80,7 +84,11 @@ def skill(obs: np.ndarray, sim: np.ndarray) -> dict[str, float]:
     pbias = float(100 * (s.sum() - o.sum()) / o.sum())
 
     # `n` = number of valid pairs the scores were computed on (context for the rest).
-    return {"n": int(len(o)), "nse": nse, "kge": kge, "rmse": rmse, "pbias": pbias}
+    # `kge_r`/`kge_alpha`/`kge_beta` are surfaced so a low KGE can be attributed to
+    # timing (r), amplitude (alpha), or bias (beta) -- the term furthest from 1.
+    return {"n": int(len(o)), "nse": nse, "kge": kge,
+            "kge_r": r, "kge_alpha": alpha, "kge_beta": beta,
+            "rmse": rmse, "pbias": pbias}
 
 
 def estimators(df: pd.DataFrame) -> dict[str, np.ndarray]:
@@ -147,7 +155,10 @@ def main() -> None:
 
     logger.info(f"[benchmark] scored {len(df)} gauged rows -> {args.out}")
     with pd.option_context("display.width", 120):
-        logger.info(out[out.scope == "overall"].to_string(index=False))
+        # Prefix a newline so the whole table renders as one aligned block below
+        # the log line, rather than the header being shoved right by the log prefix.
+        logger.info("[benchmark] overall scores:\n%s",
+                    out[out.scope == "overall"].to_string(index=False))
 
 
 if __name__ == "__main__":
