@@ -1,6 +1,6 @@
 # Workshop conda environment. A trimmed, pinned subset of the production
 # core_env.yaml -- only what the learned-consensus discharge demo needs. Pinning
-# is the Workshop 5 reproducibility lesson: the same spec rebuilds the same env.
+# is what Lesson 5 (reproducibility) is about: the same spec rebuilds the same env.
 #
 #   conda env create -f environment.yml
 #   conda activate workshop-hpc

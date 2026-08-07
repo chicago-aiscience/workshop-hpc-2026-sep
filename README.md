@@ -36,7 +36,7 @@ exercise GPU training, checkpoint/resume, and job arrays; the lesson is about
 
 - **Stage A** trains once (one GPU job).
 - **Stage B** fans out across a SLURM **job array** — each task predicts a stride
-  (`--shard`) of the reaches in parallel.
+  (`--index`) of the reaches in parallel.
 - **Stage C** runs after B via a **job dependency** (`afterok`): it gathers the
   per-shard predictions, scores the learned consensus vs. the naive
   multi-algorithm mean vs. Confluence's consensus, and writes figures.
@@ -48,10 +48,12 @@ exercise GPU training, checkpoint/resume, and job arrays; the lesson is about
 | `environment.yml` | Pinned conda env (`workshop-hpc`) |
 | `config/paths.sh` | `INPUT_DIR` / `SOS_FILE` / `SVS_FILE` / `PRIORS_FILE` / `BASINS` / `WORK_DIR` / `ENV_NAME` — sourced by every job |
 | `config/setup_env.sh` | Build/rebuild the conda env in scratch space (idempotent) |
+| `config/experiments/baseline.yaml` | Committed experiment config: model + training knobs and `data.basins` |
+| `src/config.py` | Load/merge config + CLI overrides; write `config_used.yaml` beside each run |
 | `src/build_manifest.py` | Join SoS + SVS (+priors) → one row per `(reach, overpass)` manifest CSV |
 | `src/_features.py` | Shared feature engineering (log1p, per-row median impute, cyclic month) + target |
 | `src/train_consensus.py` | Train the consensus MLP → `consensus_model_final.pt` (checkpoint/resume) |
-| `src/predict_discharge.py` | Predict discharge for a `--shard` of reaches; shardable by job array |
+| `src/predict_discharge.py` | Predict discharge for a `--index` slice of reaches; shardable by job array |
 | `src/aggregate_discharge.py` | Concatenate per-shard prediction CSVs → one `discharge.csv` |
 | `src/benchmark_consensus.py` | Score learned vs. naive-mean vs. consensus (NSE / KGE / RMSE / %bias) → `scored.csv` |
 | `src/evaluate.py` | Figures: skill bars, predicted-vs-observed scatter, hydrograph + `summary.txt` |
@@ -62,7 +64,8 @@ exercise GPU training, checkpoint/resume, and job arrays; the lesson is about
 | `slurm/03_monitor.md` | `squeue` / `sacct` / `nvidia-smi` cheat-sheet |
 | `slurm/04_predict_array.sbatch` | Parallel prediction via **job array** (Stage B) |
 | `slurm/05_aggregate_dep.sbatch` | Aggregate → benchmark → evaluate via **job dependency** (Stage C) |
-| `WORKSHOP_GUIDE.md` | Which file teaches which workshop session |
+| `slurm/06_nodelocal_predict.sbatch` | Predict + aggregate on **node-local** disk, copy only the result back |
+| `WORKSHOP_GUIDE.md` | Which file teaches which lesson |
 
 ## Quick start (on the cluster)
 
@@ -86,8 +89,7 @@ script header for options).
 ## Data
 
 Defaults come from `config/paths.sh` (`INPUT_DIR=/data/workshop-hpc-data/confluence-mini/input`),
-the mini dataset produced once by `data_prep/build_mini_dataset.py` from the full
-public SWOT Confluence products, sliced to two basins:
+the mini dataset produced once by a script from the full public SWOT Confluence products, sliced to two basins:
 
 ```
 input/eu_SOS_mini.nc     # SoS results: per-reach FLPE discharge (metroman, momma,
@@ -133,10 +135,10 @@ python src/build_manifest.py --sos "$SOS_FILE" --svs "$SVS_FILE" --priors "$PRIO
     --basins $BASINS --mode infer --out "$WORK_DIR/data/manifest_infer.csv"
 
 # 4. Predict discharge (GPU) -> $WORK_DIR/runs/predictions/predictions_000.csv
-#    (in SLURM this fans out across a job array; --shard/--num-shards stride the manifest)
+#    (in SLURM this fans out across a job array; --index/--num-tasks stride the manifest)
 python src/predict_discharge.py --manifest "$WORK_DIR/data/manifest_infer.csv" \
     --model "$WORK_DIR/runs/consensus/consensus_model_final.pt" \
-    --out-dir "$WORK_DIR/runs/predictions" --shard 0 --num-shards 1
+    --out-dir "$WORK_DIR/runs/predictions" --index 0 --num-tasks 1
 
 # 5. Aggregate per-shard predictions -> one tidy discharge table
 python src/aggregate_discharge.py --pred-dir "$WORK_DIR/runs/predictions" \

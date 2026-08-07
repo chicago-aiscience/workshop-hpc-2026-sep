@@ -9,7 +9,7 @@
 #SBATCH --time=00:20:00
 #SBATCH --output=logs/aggregate_%j.out
 #SBATCH --error=logs/aggregate_%j.err
-# --- Workshop 4: SLURM dependency. Run this ONLY after the prediction array
+# --- Lesson 4: SLURM dependency. Run this ONLY after the prediction array
 #     finishes, then submit the chain like:
 #
 #       aid=$(sbatch --parsable slurm/04_predict_array.sbatch)

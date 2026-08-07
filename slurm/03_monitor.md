@@ -1,4 +1,4 @@
-# Workshop 2 — Monitoring, metrics, and recovery
+# Lesson 3 — Monitoring, metrics, and recovery
 
 Use the training job (`02_train.sbatch`) as the running example.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=consensus-train
-#SBATCH --account=pi-dfreedman          # change to an allowed account on the cluster
+#SBATCH --account=pi-dfreedman          # Schmidt fellows PI account
 #SBATCH --partition=schmidt-gpu         # GPU partition for Schmidt fellows
 #SBATCH --qos=schmidt
 #SBATCH --gres=gpu:1                    # request 1 GPU (adjust as needed)
@@ -9,9 +9,9 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=02:00:00
-#SBATCH --output=logs/train_%j.out      # stdout  -> normal log  (Workshop 2)
+#SBATCH --output=logs/train_%j.out      # stdout  -> normal log  (Lesson 3)
 #SBATCH --error=logs/train_%j.err       # stderr  -> error log
-# --- Workshop 1: a first batch GPU job. Submit with: sbatch slurm/02_train.sbatch
+# --- Lesson 1: a first batch GPU job. Submit with: sbatch slurm/02_train.sbatch
 
 set -euo pipefail
 source config/paths.sh

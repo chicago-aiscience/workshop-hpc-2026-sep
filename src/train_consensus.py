@@ -8,7 +8,7 @@ the naive multi-algorithm mean. Reads the (reach, overpass) rows from a manifest
 built by build_manifest.py; both features and target are log-transformed.
 
 Supports checkpoint/resume so a preempted job can pick up where it left off
-(Workshop 2 + 5): the SIGUSR2 warning triggers a safe save + clean exit, and the
+(Lessons 3 + 5): the SIGUSR2 warning triggers a safe save + clean exit, and the
 wrapper in slurm/03_checkpoint.sbatch requeues.
 
     python src/train_consensus.py --manifest data/manifest_train.csv \

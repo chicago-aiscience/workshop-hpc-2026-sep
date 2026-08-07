@@ -3,7 +3,7 @@
 
 Loads the model saved by train_consensus.py and applies it to the inference
 manifest, writing predicted discharge per (reach, overpass). Designed to run as a
-SLURM job array (Workshop 4): each task takes a `--index` of the manifest rows so
+SLURM job array (Lesson 4): each task takes a `--index` of the manifest rows so
 the reaches are processed in parallel. Runs on GPU when one is available.
 
     python src/predict_discharge.py --manifest data/manifest_infer.csv \

@@ -9,10 +9,10 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=02:00:00
-#SBATCH --array=0-9                  # 10 parallel tasks (Workshop 4: job arrays)
+#SBATCH --array=0-9                  # 10 parallel tasks (Lesson 4: job arrays)
 #SBATCH --output=logs/predict_%A_%a.out   # %A=job id, %a=array index
 #SBATCH --error=logs/predict_%A_%a.err
-# --- Workshop 4: predict discharge for ALL reaches in the two basins, in
+# --- Lesson 4: predict discharge for ALL reaches in the two basins, in
 #     parallel. Each array task handles ~1/10th of the reaches.
 #     sbatch slurm/04_predict_array.sbatch
 #

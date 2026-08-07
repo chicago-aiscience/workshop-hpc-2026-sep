@@ -1,4 +1,4 @@
-# Workshop 1 — Interactive session walkthrough
+# Lesson 1 — Interactive session walkthrough
 
 Before submitting batch jobs, get a feel for the cluster live. This is the
 "hello world" of the project: log in, grab a GPU interactively, train the model

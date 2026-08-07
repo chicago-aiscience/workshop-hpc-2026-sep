@@ -1,86 +1,91 @@
-# Workshop Guide — mapping the project to the 5 sessions
+# Workshop Guide — mapping the project to the 5 lessons
 
-One project, used end to end. Each session adds one layer of cluster skill on
-top of the same segmentation task.
+One project, used end to end. Each lesson adds one layer of cluster skill on top
+of the same learned-consensus river discharge task.
 
 ## 1. Getting Started
-**Goal:** log in, environment, first job.
-- `slurm/01_interactive.md` — SSH to DSI (login vs. compute nodes), `module load`,
-  `conda env create -f environment.yml`, grab a GPU with `srun --pty`, run the
-  model on one image.
-- `environment.yml` — modules vs. conda environments.
-- `slurm/02_finetune.sbatch` — turn the interactive run into a submitted batch
-  job; partitions, `--gres=gpu:1`, `sbatch`.
 
-## 2. Errors and Monitoring
-**Goal:** watch jobs + resources, read failures, recover.
-- `slurm/03_monitor.md` — `squeue`, `scontrol`, `scancel`; live GPU with
-  `nvidia-smi` after SSH-ing to the node; `sinfo`; post-run metrics with `sacct`.
-- Logs vs. errors: `02_finetune.sbatch` splits `--output`/`--error`. Demo a CUDA
-  OOM by raising `--batch-size`, read the `.err`, fix it.
-- `slurm/06_checkpoint.sbatch` — recovering from preemption (intro to
-  checkpointing; full treatment in session 5).
+**Goal:** Log in to the cluster, set up a software environment, and submit your
+first interactive and batch jobs.
 
-## 3. Data Management
-**Goal:** move/organize/store data; scratch vs. long-term; node-local.
-- `config/paths.sh` — `INPUT_DIR` (read-only project data) vs. `WORK_DIR` (your
-  scratch); the "don't write to home" rule.
-- Getting data on/off the cluster: `scp` / `sftp` / `rsync` the `input/` tree.
-- `src/build_manifest.py` — a manifest decouples *where* data lives from *what* a
-  job reads; the natural place to stage to **node-local** storage for the
-  I/O-heavy 1,000-image read, then write masks back to project storage.
+- **`slurm/01_interactive.md`** - Log in (SSH + Duo on RCC), clone the repo, build the env, grab a GPU with `srun --pty`, and train on one sub-basin as a smoke test.
+- **`environment.yml`** - Modules vs. conda environments; the pinned spec every job activates.
+- **`config/setup_env.sh`** - Builds (or rebuilds) the conda env in scratch space; idempotent, and picks whichever package manager is available.
+- **`slurm/02_train.sbatch`** - Turn the interactive run into a submitted batch job: accounts, partitions, `--gres=gpu:1`, `sbatch`.
+
+## 2. Data Management
+
+**Goal:** Move data on and off the cluster and place it across scratch,
+long-term, and node-local storage for fast, safe runs.
+
+- **`config/paths.sh`** - `INPUT_DIR` (read-only project inputs) vs. `WORK_DIR` (your scratch); the "don't write to `$HOME`" rule, sourced by every job.
+- **Getting data on/off the cluster** - `scp` / `sftp` / `rsync` the `input/` tree: `eu_SOS_mini.nc`, `svs_mini.nc`, `priors_mini.csv`.
+- **`slurm/06_nodelocal_predict.sbatch`** - Stage inputs onto node-local disk, write the many small per-shard prediction files there, aggregate locally, then copy only `discharge.csv` back to durable storage.
+- **`src/build_manifest.py`** - A manifest decouples *where* data lives from *what* a job reads, which is what makes node-local staging and array sharding possible.
+- **`config/experiments/baseline.yaml`** + **`src/config.py`** - Keep the config with the results: `save_config()` writes the fully-resolved knobs to `config_used.yaml` in the run's output directory.
+
+## 3. Errors and Monitoring
+
+**Goal:** Watch jobs and GPU usage while they run, read metrics and logs to
+diagnose failures, and recover from interruptions.
+
+- **`slurm/03_monitor.md`** - `squeue`, `scontrol`, `scancel`, `sinfo`; live GPU with `nvidia-smi` via `srun --jobid --overlap`; post-run metrics with `sacct`.
+- **Logs vs. errors** - `02_train.sbatch` splits `--output` and `--error`. Demo an out-of-memory failure by shrinking `--mem` (or raising the batch size), read the `.err`, fix it.
+- **`slurm/03_checkpoint.sbatch`** - Recovering from preemption and the `--time` wall; send the warning yourself with `scancel -s USR2 -b <JOBID>` and watch the job requeue (intro to checkpointing; full treatment in Lesson 5).
 
 ## 4. Building Workflows
-**Goal:** parallelize with job arrays + dependencies.
-- Batch vs. interactive recap (`02_finetune.sbatch` vs. `01_interactive.md`).
-- `slurm/04_infer_array.sbatch` — segment 1,000 images as a **job array**
-  (`--array=0-9`); `seg_infer.py` strides the manifest by `SLURM_ARRAY_TASK_ID`.
-- `slurm/05_morphology_dep.sbatch` — the analysis stage runs via
-  `--dependency=afterok:` only after every array task succeeds. This is the full
-  segment → measure → classify → evaluate pipeline (classify is supervised on the
-  survey quality label, grouped by organoid; `evaluate.py` writes the confusion
-  matrix + feature-importance plots and reports balanced accuracy / TNR — a good
-  moment to show why raw accuracy misleads on this imbalanced QC task).
+
+**Goal:** Turn a multi-step pipeline into parallel job arrays chained by SLURM
+dependencies.
+
+- **Batch vs. interactive recap** - `02_train.sbatch` vs. `01_interactive.md`.
+- **`slurm/04_predict_array.sbatch`** - Predict discharge for every reach as a **job array** (`--array=0-9`); `src/predict_discharge.py` strides the manifest by `SLURM_ARRAY_TASK_ID` so each task takes its own slice.
+- **`slurm/05_aggregate_dep.sbatch`** - The analysis tail runs via `--dependency=afterok:` only after every array task succeeds: `aggregate_discharge.py` gathers the per-shard CSVs, `benchmark_consensus.py` scores the learned consensus against the naive multi-algorithm mean and Confluence's own consensus (NSE / KGE / RMSE / %bias), and `evaluate.py` writes the skill bars, predicted-vs-observed scatter, hydrograph, and `summary.txt` — a good moment to show why one metric alone can mislead.
 
 ## 5. Reproducibility and Checkpointing
-**Goal:** pin environments, manifests, record metadata, checkpoint.
-- `environment.yml` — pinned (`==`) deps. **War story:** the production
-  segmenter needs a totally different, frozen env (`mmcv_env`: Python 3.9,
-  torch 1.10, `mmcv==2.0.0rc4`) — show why pinning is non-negotiable.
-- `src/build_manifest.py` output — the **manifest file** records exactly which
-  inputs a run consumed (ties to the AI-Science reproducibility guide).
-- **Label provenance** — `add_survey_labels.py` keeps `survey_votes` /
-  `survey_n_evaluations` / `survey_label_source` ("direct" vs "propagated")
-  alongside each label, so the majority-vote derivation is auditable, not a
-  black box. A good reproducibility talking point: labels are *derived*, and the
-  derivation is recorded.
-- Record job metadata into results: stamp `SLURM_JOB_ID` / git SHA / env hash
-  into the run dir (extend `seg_finetune.py`'s save).
-- `src/seg_finetune.py --resume` + `slurm/06_checkpoint.sbatch` — checkpoint
-  every epoch, `--requeue` + `--signal=B:USR1@120`, resume after preemption.
+
+**Goal:** Pin environments, record manifests and job metadata, and checkpoint
+jobs so runs are repeatable and interruption-proof.
+
+- **`environment.yml`** - Pinned deps, so the same spec rebuilds the same environment months later.
+- **`config/experiments/baseline.yaml`** - Every model and training knob lives in a committed YAML, so a new experiment is a new committed file that Git diffs cleanly — not an undocumented CLI flag.
+- **`src/config.py`** - `save_config()` records the fully-resolved config next to the results, so each run is self-describing.
+- **`src/build_manifest.py`** output - The manifest file records exactly which inputs a run consumed (ties to the AI-Science reproducibility guide).
+- **Job metadata in results** - Extension exercise: stamp `SLURM_JOB_ID`, the git SHA, and an env hash into the run directory alongside `config_used.yaml` (extend `train_consensus.py`'s save).
+- **`src/train_consensus.py --resume-from` + `slurm/03_checkpoint.sbatch`** - Checkpoint on a step interval, at each epoch boundary, and on the `SIGUSR2` warning; `--requeue` + `--signal=B:USR2@120` plus `scontrol requeue` then resume from `consensus_last.pt`.
 
 ## Suggested live demo order
+
 ```bash
-# S1: interactive (01_interactive.md), then:
-sbatch slurm/02_finetune.sbatch
-# S2: squeue / sacct / nvidia-smi while it runs (03_monitor.md)
-# S4: the dependency chain
-fid=$(sbatch --parsable slurm/02_finetune.sbatch)
-aid=$(sbatch --parsable --dependency=afterok:$fid slurm/04_infer_array.sbatch)
-sbatch --dependency=afterok:$aid slurm/05_morphology_dep.sbatch
-# S5: cancel+requeue 06_checkpoint.sbatch, watch it resume
+# L1: interactive walkthrough (01_interactive.md), then a first batch job:
+sbatch slurm/02_train.sbatch
+# L2: stage to node-local disk and copy only the result back
+sbatch slurm/06_nodelocal_predict.sbatch
+# L3: squeue / sacct / nvidia-smi while it runs (03_monitor.md)
+# L4: the dependency chain
+fid=$(sbatch --parsable slurm/02_train.sbatch)
+aid=$(sbatch --parsable --dependency=afterok:$fid slurm/04_predict_array.sbatch)
+sbatch --dependency=afterok:$aid slurm/05_aggregate_dep.sbatch
+# L5: signal + requeue 03_checkpoint.sbatch, watch it resume
+sbatch slurm/03_checkpoint.sbatch
+scancel --signal=USR2 --batch <JOBID>
 ```
+
+`02_train.sbatch` and `03_checkpoint.sbatch` are **alternatives** for the training
+stage — both produce the same `consensus_model_final.pt`.
 
 ## Order of execution
 
 ```bash
-0. setup env          (once)
-1. build_manifest     train manifest          ─┐
-2. seg_finetune       → seg_finetune_model_final.pt │ GPU
-3. build_manifest     infer manifest           │
-4. seg_infer          → masks/                 ─┘ GPU (parallel)
-5. morphology         → morphology.csv         ─┐
-6. classify (+labels) → classified.csv          │ CPU
-7. evaluate           → eval/ (metrics + plots) ─┘
-   (labels.csv ships with the dataset: add_survey_labels.py → make_labels.py)
+0. setup_env             (once)
+1. build_manifest        train manifest           ─┐
+2. train_consensus       → consensus_model_final.pt │ GPU
+3. build_manifest        infer manifest            │
+4. predict_discharge     → predictions_000..009.csv ─┘ GPU (parallel, job array)
+5. aggregate_discharge   → discharge.csv           ─┐
+6. benchmark_consensus   → scored.csv               │ CPU
+7. evaluate              → eval/ (plots + summary) ─┘
 ```
+
+See `README.md` for the full file table and the copy-pasteable manual commands
+for each step.

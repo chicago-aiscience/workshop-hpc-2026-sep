@@ -68,7 +68,7 @@ def save_config(cfg: dict, path: str | Path) -> None:
     """Write the fully-resolved `cfg` to `path` as YAML.
 
     Dropped into a run's output directory so each run records exactly the knobs it
-    used -- reproducible and diffable next to its results (Lesson 3: track configs).
+    used -- reproducible and diff-able next to its results (Lesson 2: track configs).
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
