@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import yaml
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -113,6 +114,33 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--checkpoint-interval", type=int, default=None,
                     help="save a regular checkpoint every N steps (0 disables interval saves)")
     return ap.parse_args()
+
+
+def data_provenance(manifest: str | Path) -> dict:
+    """Build the `data` block to record for a run reading `manifest`.
+
+    Reads the `data` block out of the manifest's sibling `.config_used.yaml`, so
+    knobs resolved upstream (notably `data.basins`, which a `--basins` flag on
+    build_manifest.py can override) are recorded as the run actually used them.
+
+    Args:
+        manifest: Path to the manifest CSV this run reads.
+
+    Returns:
+        The manifest's recorded `data` block with the resolved manifest path added.
+        Just the path when the manifest has no sibling record -- an absent field is
+        recoverable, a guessed one is not.
+    """
+    manifest = Path(manifest)
+    record = manifest.with_suffix(".config_used.yaml")
+    if record.exists():
+        with open(record) as f:
+            data = (yaml.safe_load(f) or {}).get("data", {})
+    else:
+        data = {}
+        logger.warning("no %s beside the manifest; basin selection not recorded", record.name)
+    data["manifest"] = str(manifest.resolve())
+    return data
 
 
 def load_checkpoint(ckpt: Path, device: str, model: nn.Module, opt: torch.optim.Optimizer) -> int:
@@ -262,6 +290,11 @@ def main() -> None:
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+
+    # Provenance that crosses a stage boundary- Take it from the manifest's own
+    # record instead, and always stamp in which manifest was consumed.
+    cfg["data"] = data_provenance(args.manifest)
+
     save_config(cfg, out / "config_used.yaml")      # record the resolved knobs beside the run
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"[train] device={device}")

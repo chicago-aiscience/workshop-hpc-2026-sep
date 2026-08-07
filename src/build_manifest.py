@@ -25,7 +25,7 @@ import numpy as np
 import netCDF4 as nc
 
 from utils import configure_logging
-from config import load_config, apply_overrides
+from config import load_config, apply_overrides, save_config
 
 MISSING = -999999999999.0
 SOS_EPOCH = dt.datetime(2000, 1, 1)          # SoS reaches/time units
@@ -276,6 +276,14 @@ def main() -> None:
     # Write intermediate file with formatted and aligned input data
     n_reach = write_output(args.out, rows)
     logger.info(f"[manifest] mode={args.mode} rows={len(rows)} reaches={n_reach} -> {args.out}")
+
+    # Record the resolved knobs beside the manifest
+    cfg["data"]["basins"] = basins            # the strings actually matched against
+    cfg["data"]["mode"] = args.mode           # train (gauge-filtered) vs infer (all reaches)
+    cfg["data"]["manifest"] = str(Path(args.out).resolve())   # which file these knobs produced
+    cfg_path = Path(args.out).with_suffix(".config_used.yaml")
+    save_config(cfg, cfg_path)
+    logger.info(f"[manifest] resolved config -> {cfg_path}")
 
 
 if __name__ == "__main__":

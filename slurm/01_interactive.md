@@ -125,5 +125,12 @@ python src/train_consensus.py \
     --out "$WORK_DIR"/consensus --epochs 1
 ```
 
-Watch the loss print. When it finishes, `exit` releases the node. The exact knobs
-this run used are recorded at `"$WORK_DIR"/consensus/config_used.yaml`.
+Watch the loss print. When it finishes, `exit` releases the node.
+
+Each stage records the knobs it resolved:
+
+- `"$WORK_DIR"/tiny.config_used.yaml` - what `build_manifest.py` used, including the
+  `--basins 232270` override and the absolute path of the manifest it wrote.
+- `"$WORK_DIR"/consensus/config_used.yaml` - what `train_consensus.py` used, including
+  `--epochs 1`, the manifest it consumed, and the basins inherited from that manifest's
+  record (not from `baseline.yaml`, which this stage never applied `--basins` to).
