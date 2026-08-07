@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=consensus-nodelocal
-#SBATCH --account=pi-dfreedman          # change to an allowed account on the cluster
-#SBATCH --partition=general             # <-- your CPU partition (add --gres=gpu:1 to predict on GPU)
+#SBATCH --account=pi-dfreedman          # RCC: your Slurm allocation (change to one you can use)
+#SBATCH --partition=caslake             # RCC CPU partition (GPU: --partition=schmidt-gpu --qos=schmidt --gres=gpu:1)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -9,7 +9,7 @@
 #SBATCH --time=00:30:00
 #SBATCH --output=logs/nodelocal_%j.out
 #SBATCH --error=logs/nodelocal_%j.err
-# --- Lesson 3 (Data management): stage inputs to fast NODE-LOCAL disk, do the
+# --- Lesson 2 (Data management): stage inputs to fast NODE-LOCAL disk, do the
 #     predict -> aggregate work there, then copy ONLY the aggregated result back
 #     to shared storage.
 #
@@ -17,12 +17,26 @@
 #
 #     Why: reading the netCDF inputs and writing the many small per-shard
 #     prediction files on node-local disk keeps that traffic OFF the shared
-#     filesystem (the many-small-files problem from Lesson 3). Only the single
+#     filesystem (the many-small-files problem from Lesson 2). Only the single
 #     rolled-up discharge.csv is worth keeping, so only that is copied back.
 #
 #     Needs a trained model at $WORK_DIR/runs/consensus/consensus_model_final.pt
 #     (from slurm/02_train.sbatch or 03_checkpoint.sbatch). Create logs/ first:
 #       mkdir -p logs
+#
+#     -------------------------------------------------------------------------
+#     This script defaults to RCC (Midway). To run it on the DSI cluster, make
+#     three changes (RCC needs none of them -- see Lesson 2, node-local sections):
+#       1. Partition: use  #SBATCH --partition=general  and drop the RCC-only
+#          --qos=schmidt / schmidt-gpu settings (add --gres=gpu:1 for a GPU node).
+#       2. Request node-local disk: add  #SBATCH --gres=local:50G  (size to fit
+#          your inputs). RCC hands every job node-local scratch automatically;
+#          DSI only places you on a node with local disk if you REQUEST it.
+#       3. Node-local path: in step 1 below, set
+#             LOCAL=/local/scratch/${USER}_${SLURM_JOB_ID}
+#          DSI does not set $SLURM_TMPDIR, so the fallback would land on slow
+#          shared /tmp instead of the fast NVMe local disk.
+#     -------------------------------------------------------------------------
 
 set -euo pipefail
 source config/paths.sh
@@ -33,9 +47,13 @@ NSHARDS=10                                                   # prediction shards
 MODEL="$WORK_DIR/runs/consensus/consensus_model_final.pt"
 
 # --- 1. Pick a node-local scratch dir -------------------------------------------
-# $SLURM_TMPDIR is per-job disk physically ON the compute node: fast and private,
-# but EPHEMERAL -- Slurm wipes it at job end. Fall back to a job-unique /tmp path
-# if the site doesn't set it.
+# RCC: $SLURM_TMPDIR is the per-job disk physically ON the compute node (fast and
+# private, but EPHEMERAL -- Slurm wipes it at job end); every RCC job gets one for
+# free. The /tmp fallback just covers a site that doesn't set the variable.
+# DSI: $SLURM_TMPDIR is NOT set -- change this to
+#   LOCAL=/local/scratch/${USER}_${SLURM_JOB_ID}
+# and request it with --gres=local (see the header). Otherwise the fallback lands
+# on slow shared /tmp, not the fast local disk.
 LOCAL="${SLURM_TMPDIR:-/tmp/$USER/$SLURM_JOB_ID}"
 mkdir -p "$LOCAL/input" "$LOCAL/predictions"
 
@@ -47,17 +65,19 @@ trap cleanup EXIT
 echo "[nodelocal] staging inputs to $LOCAL on $(hostname)"
 
 # --- 2. Stage inputs: shared filesystem -> node-local ---------------------------
-# Copy the read-only netCDFs and the trained model onto local disk ONCE, so the
+# rsync the read-only netCDFs and the trained model onto local disk ONCE, so the
 # compute reads from fast local storage instead of repeatedly hitting the shared FS.
-cp "$SOS_FILE" "$SVS_FILE" "$LOCAL/input/"
-cp "$MODEL" "$LOCAL/model.pt"
+# rsync -a preserves timestamps/permissions and only transfers what's missing, so
+# re-running (e.g. after a requeue) skips files already staged.
+rsync -a "$SOS_FILE" "$SVS_FILE" "$LOCAL/input/"
+rsync -a "$MODEL" "$LOCAL/model.pt"
 SOS_LOCAL="$LOCAL/input/$(basename "$SOS_FILE")"
 SVS_LOCAL="$LOCAL/input/$(basename "$SVS_FILE")"
 
 # Priors are optional: stage + pass them only if the file exists.
 PRIORS_ARG=()
 if [[ -f "$PRIORS_FILE" ]]; then
-    cp "$PRIORS_FILE" "$LOCAL/input/"
+    rsync -a "$PRIORS_FILE" "$LOCAL/input/"
     PRIORS_ARG=(--priors "$LOCAL/input/$(basename "$PRIORS_FILE")")
 fi
 
@@ -87,7 +107,8 @@ python src/aggregate_discharge.py \
 
 # --- 6. Move ONLY the aggregated result back to shared storage ------------------
 # This single file is what we keep; the per-shard files stay on node-local and are
-# wiped by the trap. Copy BEFORE the job ends -- node-local disk does not persist.
+# wiped by the trap. rsync it back BEFORE the job ends -- node-local disk does not
+# persist. rsync over cp gives an atomic-ish, resumable transfer of the result.
 mkdir -p "$WORK_DIR/runs"
-cp "$LOCAL/discharge.csv" "$WORK_DIR/runs/discharge.csv"
+rsync -a "$LOCAL/discharge.csv" "$WORK_DIR/runs/discharge.csv"
 echo "[nodelocal] wrote $WORK_DIR/runs/discharge.csv ($(wc -l < "$WORK_DIR/runs/discharge.csv") lines)"
